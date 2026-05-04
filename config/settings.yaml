@@ -1,0 +1,108 @@
+# ============================================================
+#  AirdropAgent — Configuration Principale
+#  Modifie ce fichier selon tes besoins.
+#  Aucun changement de code source requis.
+# ============================================================
+
+agent:
+  name: "AirdropAgent"
+  version: "1.0.0"
+  run_interval_hours: 2        # Fréquence de la boucle (synchronisé avec GitHub Actions)
+  log_level: "INFO"            # DEBUG | INFO | WARNING | ERROR
+  timezone: "Africa/Porto-Novo"
+
+# ------------------------------------------------------------
+#  LLM Backend
+#  mode: "groq" pour GitHub Actions (recommandé)
+#         "ollama" pour usage local Termux
+# ------------------------------------------------------------
+llm:
+  mode: "groq"                 # "groq" | "ollama"
+  groq:
+    model: "llama-3.1-70b-versatile"   # Modèle Groq recommandé
+    max_tokens: 1024
+    temperature: 0.7
+  ollama:
+    model: "mistral"
+    base_url: "http://localhost:11434"
+    max_tokens: 1024
+    temperature: 0.7
+
+# ------------------------------------------------------------
+#  Notifications
+#  Configure tes canaux ici. Les secrets (tokens, URLs)
+#  doivent être dans les GitHub Secrets — jamais ici.
+# ------------------------------------------------------------
+notifications:
+  discord:
+    enabled: true
+    # DISCORD_WEBHOOK doit être dans GitHub Secrets
+    mention_on_urgent: true    # Envoie @everyone si urgence haute
+    daily_brief: true          # Briefing quotidien activé
+    action_suggestions: true   # Tweets générés et actions suggérées
+    quest_alerts: true         # Alertes nouvelles quêtes
+
+  telegram:
+    enabled: true
+    # TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID dans GitHub Secrets
+    daily_brief: true
+    action_suggestions: true
+    quest_alerts: true
+    snapshot_alerts: true      # Alertes snapshot/TGE imminents
+
+  urgency_threshold: 7         # Score min (sur 10) pour alerte immédiate
+
+# ------------------------------------------------------------
+#  Projets suivis
+#  Ajoute ici les projets que tu veux tracker.
+#  Tu peux aussi utiliser : python -m airdrop_agent add-project
+# ------------------------------------------------------------
+projects:
+  - name: "MONAD"
+    twitter_handle: "monad_xyz"
+    discord_invite: "monad"        # Partie après discord.gg/
+    telegram_handle: "monadxyz"
+    chain: "monad-testnet"
+    contract_address: null
+    tge_date: null                 # Format: "2026-06-01" ou null
+    priority: 9                    # 1 (bas) à 10 (critique)
+    tags: ["L1", "testnet", "high-potential"]
+
+  - name: "BERACHAIN"
+    twitter_handle: "berachain"
+    discord_invite: "berachain"
+    telegram_handle: "BerachainOfficial"
+    chain: "berachain"
+    contract_address: null
+    tge_date: null
+    priority: 8
+    tags: ["L1", "DeFi", "mainnet"]
+
+# ------------------------------------------------------------
+#  Scraping Twitter (via instances Nitter)
+#  Les instances sont testées dans l'ordre — fallback auto.
+# ------------------------------------------------------------
+twitter:
+  tweets_per_project: 15       # Nombre de tweets récupérés par run
+  nitter_instances:
+    - "https://nitter.net"
+    - "https://nitter.privacydev.net"
+    - "https://nitter.poast.org"
+    - "https://nitter.1d4.us"
+  request_delay_seconds: 2     # Délai entre requêtes (comportement humain)
+
+# ------------------------------------------------------------
+#  Scoring & Analyse
+# ------------------------------------------------------------
+scoring:
+  urgency_weights:
+    snapshot_signal: 10
+    quest_expiring_24h: 9
+    tge_signal: 9
+    new_quest: 7
+    major_announcement: 6
+    regular_update: 3
+
+  content_generation:
+    tweets_per_project_per_day: 2
+    languages: ["fr", "en"]    # Langues des tweets générés

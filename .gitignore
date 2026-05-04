@@ -1,0 +1,47 @@
+# ============================================================
+#  AirdropAgent — .gitignore
+# ============================================================
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environnement virtuel
+venv/
+env/
+.env/
+.venv/
+
+# Variables d'environnement locales — NE JAMAIS COMMITTER
+.env
+.env.local
+*.env
+
+# Base de données locale (gérée via GitHub Artifacts)
+# Décommenter la ligne suivante si tu veux exclure la DB du repo
+# data/agent.db
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sessions Telegram locales
+*.session
+*.session-journal
