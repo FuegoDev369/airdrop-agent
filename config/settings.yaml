@@ -58,11 +58,11 @@ notifications:
 #  Tu peux aussi utiliser : python -m airdrop_agent add-project
 # ------------------------------------------------------------
 projects:
-  - name: "MONAD"
-    twitter_handle: "monad_xyz"
-    discord_invite: "monad"        # Partie après discord.gg/
-    telegram_handle: "monadxyz"
-    chain: "monad-testnet"
+  - name: "DAC | Quantum Chain"
+    twitter_handle: "dac_chain"
+    discord_invite: "dacchain"        # Partie après discord.gg/
+    telegram_handle: "dac_chain"
+    chain: "dac-testnet"
     contract_address: null
     tge_date: null                 # Format: "2026-06-01" ou null
     priority: 9                    # 1 (bas) à 10 (critique)
