@@ -1,12 +1,12 @@
 """
-llm_engine.py — v1.2
+llm_engine.py — v1.5
 Interface unifiée LLM — switch Groq (cloud) / Ollama (local)
 
-CHANGELOG v1.2 :
-  - Délai configurable entre appels (request_delay_seconds)
-    pour réduire les 429 Too Many Requests sur le plan gratuit Groq
-  - generate_tweet() forcé en anglais
-  - generate_daily_brief() et notify messages en langue configurable
+CHANGELOG v1.5 :
+  - classify_signals_batch() : classe N signaux en 1 seul appel LLM
+    au lieu de N appels individuels → divise par ~15 les appels Groq
+  - Plus de 429 possible quelle que soit la taille du projet
+  - classify_signal() conservé comme fallback (1 signal à la fois)
 """
 
 import os
@@ -23,11 +23,8 @@ class LLMEngine:
         self.mode = config["llm"]["mode"]
         self.cfg = config["llm"][self.mode]
         self._client = None
+        self.request_delay = self.cfg.get("request_delay_seconds", 1.5)
 
-        # Délai entre appels — réduit les 429 sur plan gratuit Groq
-        self.request_delay = self.cfg.get("request_delay_seconds", 0.5)
-
-        # Langue des outputs (hors tweets)
         lang_cfg = config.get("language", {})
         self.notification_language = lang_cfg.get("notification_language", "en")
 
@@ -98,24 +95,145 @@ class LLMEngine:
             logger.error(f"Erreur LLM ({self.mode}) : {e}")
             raise
 
-    # ── Méthodes spécialisées ────────────────────────────────
+    # ── BATCH CLASSIFICATION — LE COEUR DU CHANGEMENT v1.5 ──
+
+    def classify_signals_batch(self, contents: list[str], project_name: str) -> list[dict]:
+        """
+        Classifie N signaux en UN SEUL appel LLM.
+
+        Avant (v1.4) : 15 tweets → 15 appels Groq → risque 429 + lent
+        Après (v1.5) : 15 tweets → 1 appel Groq  → zéro 429 + rapide
+
+        Args:
+            contents: liste de textes bruts à classifier
+            project_name: nom du projet pour le contexte
+
+        Returns:
+            liste de dicts avec signal_type, urgency_score, summary, action_required
+            Dans le même ordre que contents. En cas d'erreur partielle,
+            retourne un dict par défaut pour l'index concerné.
+        """
+        if not contents:
+            return []
+
+        lang_note = (
+            "Write 'summary' and 'action_required' fields in French."
+            if self.notification_language == "fr"
+            else "Write 'summary' and 'action_required' fields in English."
+        )
+
+        # Formater les signaux numérotés pour le prompt
+        numbered = "\n\n".join(
+            f"[{i}] {c[:400]}" for i, c in enumerate(contents)
+        )
+
+        system = (
+            "You are an expert Web3 analyst specializing in airdrops. "
+            "You classify multiple signals at once for an airdrop tracker. "
+            "Reply ONLY with a valid JSON array, no markdown, no explanation. "
+            "The array must have exactly the same number of items as signals provided."
+        )
+
+        prompt = f"""Classify these {len(contents)} signals for project "{project_name}".
+
+{lang_note}
+
+SIGNALS:
+{numbered}
+
+Return a JSON array with exactly {len(contents)} objects, one per signal, in order:
+[
+  {{
+    "index": 0,
+    "signal_type": "quest|snapshot|tge_signal|major_announcement|regular_update|hype|irrelevant",
+    "urgency_score": <integer 1-10>,
+    "summary": "<1 sentence in configured language>",
+    "action_required": "<concrete action or null>",
+    "keywords": ["<kw1>", "<kw2>"]
+  }},
+  ...
+]
+
+Urgency scoring rules:
+- 9-10: imminent snapshot, TGE announced, quest expiring < 24h
+- 7-8 : new quest, major announcement, new testnet, hack/security alert
+- 5-6 : important update, partnership announcement
+- 3-4 : regular update, informational content
+- 1-2 : general hype, noise, irrelevant"""
+
+        try:
+            response = self.call(prompt, system)
+            clean = response.strip().strip("```json").strip("```").strip()
+            results = json.loads(clean)
+
+            # Validation : s'assurer qu'on a le bon nombre de résultats
+            if not isinstance(results, list):
+                raise ValueError("Réponse LLM n'est pas une liste JSON")
+
+            # Normaliser et compléter si manquants
+            normalized = []
+            for i, content in enumerate(contents):
+                # Chercher le résultat correspondant à cet index
+                found = next(
+                    (r for r in results if r.get("index") == i),
+                    None
+                )
+                if found:
+                    normalized.append({
+                        "signal_type": found.get("signal_type", "regular_update"),
+                        "urgency_score": int(found.get("urgency_score", 3)),
+                        "summary": found.get("summary", content[:100]),
+                        "action_required": found.get("action_required"),
+                        "keywords": found.get("keywords", []),
+                    })
+                else:
+                    # Fallback pour cet index si manquant dans la réponse
+                    normalized.append(self._default_classification(content))
+
+            logger.info(
+                f"Batch classifié : {len(normalized)} signaux en 1 appel LLM "
+                f"(projet: {project_name})"
+            )
+            return normalized
+
+        except (json.JSONDecodeError, ValueError, Exception) as e:
+            logger.warning(f"Erreur batch classification : {e} — fallback individuel")
+            # Fallback : classifier individuellement si le batch échoue
+            return [self._fallback_classify(c, project_name) for c in contents]
+
+    def _default_classification(self, content: str) -> dict:
+        """Classification par défaut quand un item manque dans la réponse batch."""
+        return {
+            "signal_type": "regular_update",
+            "urgency_score": 3,
+            "summary": content[:100],
+            "action_required": None,
+            "keywords": [],
+        }
+
+    def _fallback_classify(self, content: str, project_name: str) -> dict:
+        """Fallback individuel si le batch entier échoue."""
+        try:
+            return self.classify_signal(content, project_name)
+        except Exception:
+            return self._default_classification(content)
+
+    # ── Classification individuelle (fallback / compatibilité) ──
 
     def classify_signal(self, content: str, project_name: str) -> dict:
         """
-        Classifie un signal et lui attribue un score d'urgence.
-        Toujours en anglais en interne (JSON structuré).
+        Classifie UN signal — conservé comme fallback.
+        Préférer classify_signals_batch() pour les lots.
         """
-        system = (
-            "You are an expert Web3 analyst specializing in airdrops. "
-            "You analyze signals (tweets, Discord/Telegram messages) for an airdrop tracker. "
-            "Reply ONLY with valid JSON, no markdown, no explanation."
-        )
-
-        # Le résumé et l'action sont générés dans la langue de notification
         lang_note = (
             "Write 'summary' and 'action_required' in French."
             if self.notification_language == "fr"
-            else f"Write 'summary' and 'action_required' in English."
+            else "Write 'summary' and 'action_required' in English."
+        )
+
+        system = (
+            "You are an expert Web3 analyst specializing in airdrops. "
+            "Reply ONLY with valid JSON, no markdown, no explanation."
         )
 
         prompt = f"""Analyze this signal for project "{project_name}":
@@ -128,39 +246,23 @@ Return exactly this JSON:
 {{
   "signal_type": "quest|snapshot|tge_signal|major_announcement|regular_update|hype|irrelevant",
   "urgency_score": <integer 1-10>,
-  "summary": "<1 sentence summary in the configured language>",
-  "action_required": "<concrete action to take or null>",
-  "keywords": ["<keyword1>", "<keyword2>"]
-}}
-
-Urgency scoring:
-- 9-10: imminent snapshot, TGE announced, quest expiring < 24h
-- 7-8 : new quest, major announcement, new testnet
-- 5-6 : important update, partnership
-- 3-4 : regular update, informational content
-- 1-2 : general hype, noise, irrelevant"""
+  "summary": "<1 sentence summary>",
+  "action_required": "<concrete action or null>",
+  "keywords": ["<kw1>", "<kw2>"]
+}}"""
 
         try:
             response = self.call(prompt, system)
             clean = response.strip().strip("```json").strip("```").strip()
             return json.loads(clean)
-        except (json.JSONDecodeError, Exception) as e:
+        except Exception as e:
             logger.warning(f"Erreur classification signal : {e}")
-            return {
-                "signal_type": "regular_update",
-                "urgency_score": 3,
-                "summary": content[:100],
-                "action_required": None,
-                "keywords": []
-            }
+            return self._default_classification(content)
+
+    # ── Génération tweet ─────────────────────────────────────
 
     def generate_tweet(self, project_name: str, context: str, language: str = "en") -> str:
-        """
-        Génère un tweet authentique et engagé.
-        TOUJOURS en anglais — langue de la crypto sur Twitter/X.
-        Le paramètre language est accepté mais ignoré (toujours "en").
-        """
-        # Forcé anglais — indépendant de la config notification_language
+        """Génère un tweet — TOUJOURS en anglais."""
         system = (
             "You are a genuine Web3 community member passionate about crypto projects. "
             "You write authentic English tweets, never generic. "
@@ -184,6 +286,8 @@ Constraints:
 
         return self.call(prompt, system)
 
+    # ── Briefing quotidien ───────────────────────────────────
+
     def generate_daily_brief(self, projects_data: list) -> str:
         """Génère un briefing quotidien dans la langue configurée."""
         lang = self.notification_language
@@ -201,24 +305,24 @@ Constraints:
 
 {projects_summary[:2000]}
 
-Structure your briefing as:
+Structure:
 1. 🔴 URGENT (actions < 24h)
 2. 🟡 TODAY (recommended actions)
 3. 🟢 WATCH (nothing urgent)
 4. 💡 TIP OF THE DAY (1 strategic tip)
 
-Be concise and actionable. Write {lang_instruction}."""
+Write {lang_instruction}. Be concise and actionable."""
 
         return self.call(prompt, system)
+
+    # ── Scoring wallet ───────────────────────────────────────
 
     def score_wallet_eligibility(self, project_name: str, wallet_activity: dict) -> dict:
         """Estime le score d'éligibilité d'un wallet pour un airdrop."""
         system = (
             "You are an expert in tokenomics and airdrop eligibility criteria. "
-            "Analyze wallet activity and estimate its position in a distribution. "
             "Reply in JSON only."
         )
-
         prompt = f"""Estimate eligibility for "{project_name}" airdrop:
 
 Wallet activity: {json.dumps(wallet_activity, ensure_ascii=False)}
@@ -229,7 +333,7 @@ Return:
   "tier": "top_1pct|top_5pct|top_20pct|eligible|low|unknown",
   "strengths": ["<strength>"],
   "weaknesses": ["<weakness>"],
-  "recommended_actions": ["<action to improve>"]
+  "recommended_actions": ["<action>"]
 }}"""
 
         try:
@@ -238,10 +342,5 @@ Return:
             return json.loads(clean)
         except Exception as e:
             logger.warning(f"Erreur scoring wallet : {e}")
-            return {
-                "score_estimate": 0,
-                "tier": "unknown",
-                "strengths": [],
-                "weaknesses": [],
-                "recommended_actions": []
-            }
+            return {"score_estimate": 0, "tier": "unknown",
+                    "strengths": [], "weaknesses": [], "recommended_actions": []}

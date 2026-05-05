@@ -45,3 +45,6 @@ Thumbs.db
 # Sessions Telegram locales
 *.session
 *.session-journal
+
+# Tools
+FIND_IT_v3.1.0.py

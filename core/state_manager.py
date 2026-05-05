@@ -1,19 +1,26 @@
 """
-state_manager.py
+state_manager.py — v1.5.1
 Gestionnaire d'état persistant via SQLite.
-Unique source de vérité pour toutes les données de l'agent.
+
+CHANGELOG v1.5.1 :
+  - deactivate_removed_projects() : désactive proprement les projets
+    supprimés de config/settings.yaml (sync bidirectionnel)
+  - sync_projects_from_config() retourne maintenant un rapport
+    {added, updated, deactivated} pour les logs
 """
 
 import sqlite3
 import json
+import hashlib
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path(__file__).parent.parent / "data" / "agent.db"
+ROOT_DIR = Path(__file__).parent.parent
+DB_PATH = ROOT_DIR / "data" / "agent.db"
 
 
 def get_connection() -> sqlite3.Connection:
@@ -34,6 +41,7 @@ def initialize_db():
                 twitter_handle TEXT,
                 discord_invite TEXT,
                 telegram_handle TEXT,
+                website_url TEXT,
                 contract_address TEXT,
                 chain TEXT,
                 tge_date DATE,
@@ -49,9 +57,11 @@ def initialize_db():
                 source TEXT NOT NULL,
                 signal_type TEXT NOT NULL,
                 content TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
                 raw_data TEXT DEFAULT '{}',
                 urgency_score INTEGER DEFAULT 0,
                 actioned BOOLEAN DEFAULT 0,
+                notified BOOLEAN DEFAULT 0,
                 collected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id)
             );
@@ -84,18 +94,65 @@ def initialize_db():
                 started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 finished_at DATETIME,
                 signals_collected INTEGER DEFAULT 0,
+                signals_new INTEGER DEFAULT 0,
+                signals_duplicate INTEGER DEFAULT 0,
                 actions_generated INTEGER DEFAULT 0,
                 notifications_sent INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'running',
                 error_log TEXT
             );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_hash
+                ON signals(project_id, content_hash);
+
+            CREATE INDEX IF NOT EXISTS idx_signals_project
+                ON signals(project_id, collected_at);
+
+            CREATE INDEX IF NOT EXISTS idx_signals_notified
+                ON signals(notified, urgency_score);
         """)
+        _migrate_db(conn)
+
     logger.info(f"Base de données initialisée : {DB_PATH}")
+
+
+def _migrate_db(conn: sqlite3.Connection):
+    """Migration safe : ajoute les colonnes manquantes sur DB existante."""
+    migrations = [
+        ("signals",    "content_hash", "TEXT NOT NULL DEFAULT ''"),
+        ("signals",    "notified",     "BOOLEAN DEFAULT 0"),
+        ("agent_runs", "signals_new",  "INTEGER DEFAULT 0"),
+        ("agent_runs", "signals_duplicate", "INTEGER DEFAULT 0"),
+        ("projects",   "website_url",  "TEXT"),
+    ]
+    for table, column, col_def in migrations:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+            logger.debug(f"Migration : {table}.{column} ajoutée")
+        except sqlite3.OperationalError:
+            pass  # Colonne déjà existante
+
+
+# ── Hash de déduplication ────────────────────────────────────
+
+def compute_signal_hash(project_id: int, source: str, raw_content: str) -> str:
+    key = f"{project_id}|{source}|{raw_content[:500]}"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def signal_already_seen(project_id: int, content_hash: str) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id FROM signals WHERE project_id = ? AND content_hash = ?",
+            (project_id, content_hash)
+        ).fetchone()
+        return row is not None
 
 
 # ── Projets ──────────────────────────────────────────────────
 
 def upsert_project(project: dict) -> int:
+    """Insert ou met à jour un projet. Retourne son id."""
     with get_connection() as conn:
         existing = conn.execute(
             "SELECT id FROM projects WHERE name = ?", (project["name"],)
@@ -105,13 +162,14 @@ def upsert_project(project: dict) -> int:
             conn.execute("""
                 UPDATE projects SET
                     twitter_handle = ?, discord_invite = ?, telegram_handle = ?,
-                    contract_address = ?, chain = ?, tge_date = ?,
+                    website_url = ?, contract_address = ?, chain = ?, tge_date = ?,
                     priority = ?, tags = ?, active = 1
                 WHERE name = ?
             """, (
                 project.get("twitter_handle"),
                 project.get("discord_invite"),
                 project.get("telegram_handle"),
+                project.get("website_url"),
                 project.get("contract_address"),
                 project.get("chain"),
                 project.get("tge_date"),
@@ -124,13 +182,14 @@ def upsert_project(project: dict) -> int:
             cursor = conn.execute("""
                 INSERT INTO projects
                     (name, twitter_handle, discord_invite, telegram_handle,
-                     contract_address, chain, tge_date, priority, tags)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     website_url, contract_address, chain, tge_date, priority, tags)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 project["name"],
                 project.get("twitter_handle"),
                 project.get("discord_invite"),
                 project.get("telegram_handle"),
+                project.get("website_url"),
                 project.get("contract_address"),
                 project.get("chain"),
                 project.get("tge_date"),
@@ -138,6 +197,41 @@ def upsert_project(project: dict) -> int:
                 json.dumps(project.get("tags", [])),
             ))
             return cursor.lastrowid
+
+
+def deactivate_removed_projects(active_names: list[str]) -> list[str]:
+    """
+    Désactive tous les projets en DB qui ne sont plus dans active_names.
+    Appelé à chaque run avec la liste des projets du settings.yaml.
+
+    Retourne la liste des noms désactivés (pour les logs).
+    """
+    if not active_names:
+        # Sécurité : si la liste est vide (ex: settings.yaml mal parsé),
+        # on ne désactive rien pour éviter de tout éteindre par accident.
+        logger.warning("deactivate_removed_projects : liste vide reçue — aucune désactivation")
+        return []
+
+    with get_connection() as conn:
+        # Trouver les projets actifs en DB absents de la config
+        placeholders = ",".join("?" * len(active_names))
+        rows = conn.execute(f"""
+            SELECT name FROM projects
+            WHERE active = 1
+              AND name NOT IN ({placeholders})
+        """, active_names).fetchall()
+
+        removed = [row["name"] for row in rows]
+
+        if removed:
+            conn.execute(f"""
+                UPDATE projects SET active = 0
+                WHERE name NOT IN ({placeholders})
+            """, active_names)
+            for name in removed:
+                logger.info(f"Projet désactivé (retiré du settings.yaml) : {name}")
+
+    return removed
 
 
 def get_active_projects() -> list:
@@ -148,23 +242,62 @@ def get_active_projects() -> list:
         return [dict(r) for r in rows]
 
 
+def get_all_projects() -> list:
+    """Retourne tous les projets y compris inactifs (pour audit/debug)."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM projects ORDER BY active DESC, priority DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 # ── Signaux ──────────────────────────────────────────────────
 
-def insert_signal(signal: dict) -> int:
+def insert_signal(signal: dict) -> Optional[int]:
+    """Insert un signal. Retourne l'id ou None si doublon."""
     with get_connection() as conn:
-        cursor = conn.execute("""
-            INSERT INTO signals
-                (project_id, source, signal_type, content, raw_data, urgency_score)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            signal["project_id"],
-            signal["source"],
-            signal["signal_type"],
-            signal["content"],
-            json.dumps(signal.get("raw_data", {})),
-            signal.get("urgency_score", 0),
-        ))
-        return cursor.lastrowid
+        try:
+            cursor = conn.execute("""
+                INSERT INTO signals
+                    (project_id, source, signal_type, content,
+                     content_hash, raw_data, urgency_score)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                signal["project_id"],
+                signal["source"],
+                signal["signal_type"],
+                signal["content"],
+                signal["content_hash"],
+                json.dumps(signal.get("raw_data", {})),
+                signal.get("urgency_score", 0),
+            ))
+            return cursor.lastrowid
+        except sqlite3.IntegrityError:
+            return None  # Doublon ignoré
+
+
+def get_unnotified_urgent_signals(project_id: int, min_urgency: int = 7) -> list:
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT * FROM signals
+            WHERE project_id = ?
+              AND urgency_score >= ?
+              AND notified = 0
+            ORDER BY urgency_score DESC, collected_at DESC
+            LIMIT 5
+        """, (project_id, min_urgency)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_signals_notified(signal_ids: list):
+    if not signal_ids:
+        return
+    placeholders = ",".join("?" * len(signal_ids))
+    with get_connection() as conn:
+        conn.execute(
+            f"UPDATE signals SET notified = 1 WHERE id IN ({placeholders})",
+            signal_ids
+        )
 
 
 def get_recent_signals(project_id: int, hours: int = 24) -> list:
@@ -178,21 +311,17 @@ def get_recent_signals(project_id: int, hours: int = 24) -> list:
         return [dict(r) for r in rows]
 
 
-def get_unactioned_signals(min_urgency: int = 5) -> list:
-    with get_connection() as conn:
-        rows = conn.execute("""
-            SELECT s.*, p.name as project_name
-            FROM signals s
-            JOIN projects p ON s.project_id = p.id
-            WHERE s.actioned = 0 AND s.urgency_score >= ?
-            ORDER BY s.urgency_score DESC
-        """, (min_urgency,)).fetchall()
-        return [dict(r) for r in rows]
+# ── Nettoyage ─────────────────────────────────────────────────
 
-
-def mark_signal_actioned(signal_id: int):
+def cleanup_old_signals(days: int = 7):
     with get_connection() as conn:
-        conn.execute("UPDATE signals SET actioned = 1 WHERE id = ?", (signal_id,))
+        result = conn.execute("""
+            DELETE FROM signals
+            WHERE notified = 1
+              AND collected_at < datetime('now', ? || ' days')
+        """, (f"-{days}",))
+        if result.rowcount > 0:
+            logger.info(f"Nettoyage DB : {result.rowcount} signaux anciens supprimés")
 
 
 # ── Actions ──────────────────────────────────────────────────
@@ -232,11 +361,6 @@ def get_pending_actions(project_id: Optional[int] = None) -> list:
         return [dict(r) for r in rows]
 
 
-def mark_action_notified(action_id: int):
-    with get_connection() as conn:
-        conn.execute("UPDATE actions SET notified = 1 WHERE id = ?", (action_id,))
-
-
 def mark_action_completed(action_id: int):
     with get_connection() as conn:
         conn.execute("UPDATE actions SET completed = 1 WHERE id = ?", (action_id,))
@@ -256,6 +380,8 @@ def finish_run(run_id: int, stats: dict, status: str = "success"):
             UPDATE agent_runs SET
                 finished_at = CURRENT_TIMESTAMP,
                 signals_collected = ?,
+                signals_new = ?,
+                signals_duplicate = ?,
                 actions_generated = ?,
                 notifications_sent = ?,
                 status = ?,
@@ -263,6 +389,8 @@ def finish_run(run_id: int, stats: dict, status: str = "success"):
             WHERE id = ?
         """, (
             stats.get("signals_collected", 0),
+            stats.get("signals_new", 0),
+            stats.get("signals_duplicate", 0),
             stats.get("actions_generated", 0),
             stats.get("notifications_sent", 0),
             status,
