@@ -1,387 +1,388 @@
 # 🤖 AirdropAgent
 
-> Agent autonome multi-projets pour maximiser tes chances d'airdrop Web3.
-> Surveille Twitter, Telegram et Discord. Génère des actions concrètes. Notifie sur Discord et Telegram.
+> Autonomous multi-project agent to maximize your Web3 airdrop chances.
+> Monitors Twitter, Telegram and Discord. Generates concrete actions. Notifies you on Discord and Telegram.
 
-**Par FuegoDev** — Open Source, Python, GitHub Actions.
-
----
-
-## Pourquoi AirdropAgent ?
-
-L'ère des bots multi-wallets est révolue. Les projets Web3 récompensent désormais **l'engagement qualitatif et constant** — tweets pertinents, participation Discord active, présence communautaire régulière.
-
-Suivre 3 à 5 projets simultanément avec cette rigueur est **impossible sans outil dédié**.
-
-AirdropAgent résout exactement ce problème :
-
-- 📡 **Surveillance continue** de Twitter, Telegram et Discord de chaque projet suivi
-- 🧠 **Analyse IA** des signaux (quêtes, snapshots, annonces importantes)
-- 🐦 **Tweets générés** prêts à poster, contextualisés sur l'actualité du projet
-- 🔔 **Notifications intelligentes** sur Discord et/ou Telegram
-- 🤖 **100% autonome** via GitHub Actions — tourne seul, sans serveur
+**By FuegoDev** — Open Source, Python, GitHub Actions.
 
 ---
 
-## Architecture rapide
+## Why AirdropAgent?
+
+The multi-wallet bot era is over. Web3 projects now reward **consistent, quality engagement** — relevant tweets, active Discord participation, regular community presence.
+
+Tracking 3 to 5 projects simultaneously with this level of discipline is **impossible without a dedicated tool**.
+
+AirdropAgent solves exactly that problem:
+
+- 📡 **Continuous monitoring** of Twitter, Telegram and Discord for each tracked project
+- 🧠 **AI analysis** of signals (quests, snapshots, major announcements)
+- 🐦 **Generated tweets** ready to post, contextualized around each project's latest news
+- 🔔 **Smart notifications** on Discord and/or Telegram
+- 🤖 **Fully autonomous** via GitHub Actions — runs on its own, no server required
+
+---
+
+## Quick Architecture Overview
 
 ```
-GitHub Actions (cron toutes les 2h)
+GitHub Actions (cron every 2h)
         │
         ▼
-    agent.py (orchestrateur)
+    agent.py (orchestrator)
         │
-        ├── TwitterTracker   → tweets via Nitter (sans API)
-        ├── TelegramTracker  → messages canaux via Telethon
+        ├── TwitterTracker   → tweets via Nitter (no API needed)
+        ├── TelegramTracker  → channel messages via Telethon
         │
-        ├── LLMEngine        → Groq API (Llama 70B gratuit)
-        │     ├── Classifier les signaux (urgence 1-10)
-        │     ├── Générer des tweets authentiques
-        │     └── Briefing quotidien
+        ├── LLMEngine        → Groq API (free Llama 70B)
+        │     ├── Signal classification (urgency 1-10)
+        │     ├── Authentic tweet generation
+        │     └── Daily briefing
         │
-        ├── ContentEngine    → Plan d'actions par projet
+        ├── ContentEngine    → Action plan per project
         │
         └── Notifier         → Discord Webhook + Telegram Bot
                 │
                 ▼
-        Toi (sur ton téléphone)
+        You (on your phone)
 ```
 
-**Persistance DB** : SQLite uploadée/téléchargée via **GitHub Artifacts** à chaque run.
+**DB Persistence**: SQLite uploaded/downloaded via **GitHub Artifacts** on every run.
 
 ---
 
-## Installation & Déploiement
+## Installation & Deployment
 
-### Prérequis
+### Prerequisites
 
-- Compte GitHub
-- Compte Groq (gratuit) → https://console.groq.com
-- Bot Telegram (gratuit) → voir section dédiée
-- Webhook Discord (gratuit) → voir section dédiée
+- GitHub account
+- Groq account (free) → https://console.groq.com
+- Telegram bot (free) → see dedicated section
+- Discord webhook (free) → see dedicated section
 
 ---
 
-### Étape 1 — Fork le repo
+### Step 1 — Fork the repo
 
 ```
 https://github.com/FuegoDev/airdrop-agent
 ```
 
-Clique sur **Fork** en haut à droite → tu obtiens ton propre repo.
+Click **Fork** in the top right → you get your own copy of the repo.
 
 ---
 
-### Étape 2 — Configurer les projets à suivre
+### Step 2 — Configure the projects to track
 
-Édite `config/settings.yaml` dans ton fork :
+Edit `config/settings.yaml` in your fork:
 
 ```yaml
 projects:
   - name: "MONAD"
     twitter_handle: "monad_xyz"
-    discord_invite: "monad"        # Partie après discord.gg/
+    discord_invite: "monad"        # Part after discord.gg/
     telegram_handle: "monadxyz"
     chain: "monad-testnet"
-    priority: 9                    # 1 (bas) à 10 (critique)
+    priority: 9                    # 1 (low) to 10 (critical)
     tags: ["L1", "testnet"]
 
-  - name: "TON_PROJET"
-    twitter_handle: "handle_twitter"
-    telegram_handle: "handle_telegram"
+  - name: "YOUR_PROJECT"
+    twitter_handle: "twitter_handle"
+    telegram_handle: "telegram_handle"
     priority: 8
 ```
 
-Active/désactive les notifications selon tes préférences :
+Enable/disable notifications according to your preferences:
 
 ```yaml
 notifications:
   discord:
-    enabled: true          # ← false pour désactiver Discord
+    enabled: true          # ← false to disable Discord
     daily_brief: true
     action_suggestions: true
 
   telegram:
-    enabled: true          # ← false pour désactiver Telegram
+    enabled: true          # ← false to disable Telegram
     snapshot_alerts: true
 ```
 
 ---
 
-### Étape 3 — Obtenir la clé Groq (LLM gratuit)
+### Step 3 — Get your Groq API key (free LLM)
 
-1. Va sur https://console.groq.com
-2. Crée un compte gratuit
-3. Va dans **API Keys** → **Create API Key**
-4. Copie la clé (commence par `gsk_...`)
+1. Go to https://console.groq.com
+2. Create a free account
+3. Go to **API Keys** → **Create API Key**
+4. Copy the key (starts with `gsk_...`)
 
-> Le plan gratuit offre 14 400 requêtes/jour — largement suffisant.
-
----
-
-### Étape 4 — Créer le bot Telegram (pour recevoir les notifications)
-
-1. Ouvre Telegram → recherche **@BotFather**
-2. Envoie `/newbot`
-3. Suis les instructions → tu obtiens un **token** (format `123456:ABCdef...`)
-4. Pour obtenir ton **chat_id** :
-   - Envoie un message à ton bot
-   - Ouvre : `https://api.telegram.org/bot<TOKEN>/getUpdates`
-   - Cherche `"chat":{"id": XXXXXXXXX}` — c'est ton chat_id
+> The free plan offers 14,400 requests/day — more than enough.
 
 ---
 
-### Étape 5 — Créer le Webhook Discord
+### Step 4 — Create the Telegram bot (to receive notifications)
 
-1. Ouvre ton serveur Discord
-2. Va dans **Paramètres du salon** → **Intégrations** → **Webhooks**
-3. Clique **Nouveau Webhook**
-4. Copie l'**URL du Webhook** (format `https://discord.com/api/webhooks/...`)
-
-> Tu peux créer un salon Discord dédié `#airdrop-agent` pour recevoir les notifications.
+1. Open Telegram → search for **@BotFather**
+2. Send `/newbot`
+3. Follow the instructions → you get a **token** (format `123456:ABCdef...`)
+4. To get your **chat_id**:
+   - Send a message to your bot
+   - Open: `https://api.telegram.org/bot<TOKEN>/getUpdates`
+   - Look for `"chat":{"id": XXXXXXXXX}` — that's your chat_id
 
 ---
 
-### Étape 6 — Configurer les GitHub Secrets
+### Step 5 — Create the Discord Webhook
 
-C'est l'étape **critique**. Tous tes credentials sont stockés ici, jamais dans le code.
+1. Open your Discord server
+2. Go to **Channel Settings** → **Integrations** → **Webhooks**
+3. Click **New Webhook**
+4. Copy the **Webhook URL** (format `https://discord.com/api/webhooks/...`)
 
-Dans ton repo GitHub :
+> You can create a dedicated Discord channel `#airdrop-agent` to receive notifications.
+
+---
+
+### Step 6 — Configure GitHub Secrets
+
+This is the **critical step**. All your credentials are stored here — never in the code.
+
+In your GitHub repo:
 **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
 
-Ajoute ces secrets un par un :
+Add these secrets one by one:
 
-| Nom du secret | Valeur | Obligatoire |
+| Secret name | Value | Required |
 |---|---|---|
-| `GROQ_API_KEY` | Ta clé Groq `gsk_...` | ✅ Oui |
-| `DISCORD_WEBHOOK` | URL webhook Discord | Si Discord activé |
-| `TELEGRAM_BOT_TOKEN` | Token du bot `123456:ABCdef...` | Si Telegram activé |
-| `TELEGRAM_CHAT_ID` | Ton chat_id numérique | Si Telegram activé |
-| `TELEGRAM_API_ID` | ID API Telegram (Phase 3) | Non (optionnel) |
-| `TELEGRAM_API_HASH` | Hash API Telegram (Phase 3) | Non (optionnel) |
+| `GROQ_API_KEY` | Your Groq key `gsk_...` | ✅ Yes |
+| `DISCORD_WEBHOOK` | Discord webhook URL | If Discord enabled |
+| `TELEGRAM_BOT_TOKEN` | Bot token `123456:ABCdef...` | If Telegram enabled |
+| `TELEGRAM_CHAT_ID` | Your numeric chat_id | If Telegram enabled |
+| `TELEGRAM_API_ID` | Telegram API ID (Phase 3) | No (optional) |
+| `TELEGRAM_API_HASH` | Telegram API Hash (Phase 3) | No (optional) |
 
-> **Sécurité** : Les secrets GitHub sont chiffrés et jamais visibles après création. Ne les mets jamais dans le code ou dans settings.yaml.
-
----
-
-### Étape 7 — Activer GitHub Actions
-
-1. Dans ton repo → onglet **Actions**
-2. Si un message demande d'activer les workflows → clique **I understand my workflows, go ahead and enable them**
-3. Le workflow `AirdropAgent — Run Autonome` apparaît dans la liste
-
-**Test immédiat** : Clique sur le workflow → **Run workflow** → **Run workflow** (bouton vert)
-→ L'agent se lance manuellement pour la première fois.
+> **Security**: GitHub Secrets are encrypted and never visible after creation. Never put them in your code or in settings.yaml.
 
 ---
 
-### Étape 8 — Vérifier que tout fonctionne
+### Step 7 — Enable GitHub Actions
 
-Après le premier run (2-3 minutes) :
+1. In your repo → **Actions** tab
+2. If a message asks you to enable workflows → click **I understand my workflows, go ahead and enable them**
+3. The `AirdropAgent — Autonomous Run` workflow will appear in the list
 
-1. **Onglet Actions** → Clique sur le run → Vérifie les logs
-2. **Ton Discord** → Tu dois recevoir des notifications
-3. **Ton Telegram** → Idem
-
-Si des erreurs apparaissent, voir la section **Dépannage** ci-dessous.
+**Immediate test**: Click the workflow → **Run workflow** → **Run workflow** (green button)
+→ The agent launches manually for the first time.
 
 ---
 
-## Persistance de la base de données (GitHub Artifacts)
+### Step 8 — Verify everything is working
 
-### Comment ça fonctionne
+After the first run (2–3 minutes):
 
-AirdropAgent utilise une base SQLite (`data/agent.db`) pour stocker :
-- L'historique des signaux collectés
-- Les actions générées
-- Les runs passés et leurs statistiques
+1. **Actions tab** → Click the run → Check the logs
+2. **Your Discord** → You should receive notifications
+3. **Your Telegram** → Same
 
-À chaque run GitHub Actions :
+If errors appear, see the **Troubleshooting** section below.
+
+---
+
+## Database Persistence (GitHub Artifacts)
+
+### How it works
+
+AirdropAgent uses a SQLite database (`data/agent.db`) to store:
+- History of collected signals
+- Generated actions
+- Past runs and their statistics
+
+On every GitHub Actions run:
 
 ```
-Début du run
+Start of run
     │
     ▼
-Download agent.db depuis Artifacts  ← Restauration de l'état précédent
+Download agent.db from Artifacts  ← Restore previous state
     │
     ▼
-Exécution de l'agent (lecture + écriture DB)
+Run the agent (read + write DB)
     │
     ▼
-Upload agent.db vers Artifacts      ← Sauvegarde du nouvel état
+Upload agent.db to Artifacts      ← Save new state
     │
     ▼
-Fin du run
+End of run
 ```
 
-### Récupérer la DB en local (git pull équivalent)
+### Retrieving the DB locally (git pull equivalent)
 
-Pour accéder à l'état actuel de la DB depuis Termux ou ta machine locale :
+To access the current state of the DB from Termux or your local machine:
 
-**Méthode 1 — Interface GitHub :**
-1. Onglet **Actions** → Clique sur le dernier run réussi
-2. Section **Artifacts** en bas de page
-3. Télécharge `agent-db.zip` → décompresse → tu obtiens `agent.db`
+**Method 1 — GitHub interface:**
+1. **Actions** tab → Click the latest successful run
+2. **Artifacts** section at the bottom of the page
+3. Download `agent-db.zip` → unzip → you get `agent.db`
 
-**Méthode 2 — GitHub CLI (gh) depuis Termux :**
+**Method 2 — GitHub CLI (gh) from Termux:**
+
 ```bash
-# Installer GitHub CLI
+# Install GitHub CLI
 pkg install gh
 
-# Authentification
+# Authenticate
 gh auth login
 
-# Télécharger le dernier artifact
+# Download the latest artifact
 gh run download --name agent-db --dir data/
 ```
 
-**Méthode 3 — Script automatique :**
+**Method 3 — Automated script:**
 ```bash
 # scripts/sync_db.sh
 #!/bin/bash
-REPO="ton-username/airdrop-agent"
+REPO="your-username/airdrop-agent"
 RUN_ID=$(gh run list --repo $REPO --limit 1 --json databaseId -q '.[0].databaseId')
 gh run download $RUN_ID --repo $REPO --name agent-db --dir data/
-echo "DB synchronisée depuis le run #$RUN_ID"
+echo "DB synced from run #$RUN_ID"
 ```
 
-### Durée de rétention
+### Retention period
 
-Les artifacts sont conservés **90 jours** par défaut (configurable dans `agent.yml`).
-Après 90 jours, l'artifact est supprimé mais la DB du prochain run repart de la dernière disponible.
+Artifacts are kept for **90 days** by default (configurable in `agent.yml`).
+After 90 days, the artifact is deleted, but the next run picks up from the last available one.
 
-### Limites du plan gratuit GitHub
+### GitHub free plan limits
 
-| Ressource | Limite gratuite | Consommation AirdropAgent |
+| Resource | Free limit | AirdropAgent usage |
 |---|---|---|
-| Minutes Actions/mois | 2 000 min | ~10 min/run × 360 runs/mois = ~600 min ✅ |
-| Stockage Artifacts | 500 MB | agent.db < 10 MB ✅ |
+| Actions minutes/month | 2,000 min | ~10 min/run × 360 runs/month = ~600 min ✅ |
+| Artifact storage | 500 MB | agent.db < 10 MB ✅ |
 
 ---
 
-## Usage local (Termux)
+## Local Usage (Termux)
 
-Pour tester ou lancer manuellement depuis Termux :
+To test or run manually from Termux:
 
 ```bash
-# Cloner ton fork
-git clone https://github.com/TON_USERNAME/airdrop-agent.git
+# Clone your fork
+git clone https://github.com/YOUR_USERNAME/airdrop-agent.git
 cd airdrop-agent
 
-# Installer les dépendances
+# Install dependencies
 pip install -r requirements.txt
 
-# Configurer les variables d'environnement localement
+# Set environment variables locally
 export GROQ_API_KEY="gsk_..."
 export DISCORD_WEBHOOK="https://discord.com/api/webhooks/..."
 export TELEGRAM_BOT_TOKEN="123456:ABCdef..."
 export TELEGRAM_CHAT_ID="123456789"
 
-# Lancer l'agent
+# Run the agent
 python -m core.agent
 ```
 
-**Pour usage local avec Ollama** (sans connexion internet pour le LLM) :
+**For local usage with Ollama** (no internet connection required for the LLM):
 
 ```bash
-# Installer Ollama
+# Install Ollama
 curl -fsSL https://ollama.ai/install.sh | sh
 
-# Télécharger le modèle Mistral
+# Download the Mistral model
 ollama pull mistral
 
-# Modifier settings.yaml
+# Edit settings.yaml
 # llm:
 #   mode: "ollama"
 ```
 
 ---
 
-## Ajouter / Modifier des projets
+## Adding / Editing Projects
 
-**Sans toucher au code** — édite uniquement `config/settings.yaml` :
+**No code changes needed** — edit only `config/settings.yaml`:
 
 ```yaml
 projects:
-  - name: "NOUVEAU_PROJET"
+  - name: "NEW_PROJECT"
     twitter_handle: "handle"
     telegram_handle: "handle_tg"
-    discord_invite: "xxx"     # Ce qui suit discord.gg/
+    discord_invite: "xxx"     # What follows discord.gg/
     chain: "ethereum"
     priority: 7
     tags: ["DeFi", "L2"]
 ```
 
-Commit et push → le prochain run GitHub Actions prend en compte le changement.
+Commit and push → the next GitHub Actions run picks up the change automatically.
 
 ---
 
-## Fréquence des runs
+## Run Frequency
 
-Modifie le cron dans `.github/workflows/agent.yml` :
+Modify the cron schedule in `.github/workflows/agent.yml`:
 
 ```yaml
 schedule:
-  - cron: '0 */2 * * *'    # Toutes les 2 heures (défaut)
-  - cron: '0 */4 * * *'    # Toutes les 4 heures (économe)
-  - cron: '0 * * * *'      # Toutes les heures (intensif)
-  - cron: '0 8,14,20 * * *' # 3 fois par jour (8h, 14h, 20h UTC)
+  - cron: '0 */2 * * *'    # Every 2 hours (default)
+  - cron: '0 */4 * * *'    # Every 4 hours (lighter)
+  - cron: '0 * * * *'      # Every hour (intensive)
+  - cron: '0 8,14,20 * * *' # 3 times a day (8am, 2pm, 8pm UTC)
 ```
 
 ---
 
-## Dépannage
+## Troubleshooting
 
-### L'agent tourne mais je ne reçois rien sur Discord/Telegram
+### The agent runs but I receive nothing on Discord/Telegram
 
-1. Vérifie que les secrets GitHub sont bien configurés (Settings → Secrets)
-2. Dans `settings.yaml`, vérifie que `enabled: true` pour le canal voulu
-3. Vérifie que `urgency_threshold` n'est pas trop élevé (essaie `5` pour tester)
+1. Verify that GitHub Secrets are properly configured (Settings → Secrets)
+2. In `settings.yaml`, confirm `enabled: true` for the desired channel
+3. Check that `urgency_threshold` isn't set too high (try `5` for testing)
 
-### Erreur "GROQ_API_KEY manquant"
+### Error "GROQ_API_KEY missing"
 
-Le secret `GROQ_API_KEY` n'est pas configuré dans GitHub Secrets.
-Voir Étape 6 du guide d'installation.
+The `GROQ_API_KEY` secret is not configured in GitHub Secrets.
+See Step 6 of the installation guide.
 
-### Les tweets ne sont pas récupérés (instances Nitter)
+### Tweets are not being retrieved (Nitter instances)
 
-Les instances Nitter publiques peuvent être instables. Solutions :
-1. Vérifie les instances dans `settings.yaml` → `twitter.nitter_instances`
-2. Cherche des instances actives sur : https://status.d420.de
-3. Remplace les instances hors-ligne dans ta config
+Public Nitter instances can be unstable. Solutions:
+1. Check the instances listed in `settings.yaml` → `twitter.nitter_instances`
+2. Find active instances at: https://status.d420.de
+3. Replace offline instances in your config
 
-### La DB ne persiste pas entre les runs
+### The DB does not persist between runs
 
-Vérifie que le step `Save agent database` dans le workflow s'est exécuté (même en cas d'erreur, `if: always()` est configuré). Si le premier run échoue avant d'écrire la DB, l'artifact n'existe pas — c'est normal, le second run crée une DB fraîche.
+Check that the `Save agent database` step in the workflow executed (even on failure, `if: always()` is configured). If the first run fails before writing the DB, the artifact won't exist — this is expected. The second run will create a fresh DB.
 
-### Erreur de permission sur git push
+### Git push permission error
 
-Vérifie que `permissions: contents: write` est bien présent dans `agent.yml`.
+Verify that `permissions: contents: write` is present in `agent.yml`.
 
 ---
 
 ## Roadmap
 
-- [x] **Phase 1** — Twitter tracker + LLM + Notifications Discord/Telegram
-- [x] **Phase 1** — GitHub Actions + Persistance Artifacts
-- [ ] **Phase 2** — Telegram tracker (Telethon) complet
-- [ ] **Phase 3** — Discord bot (lecture channels)
-- [ ] **Phase 3** — On-chain tracker (RPC publics)
+- [x] **Phase 1** — Twitter tracker + LLM + Discord/Telegram notifications
+- [x] **Phase 1** — GitHub Actions + Artifact persistence
+- [ ] **Phase 2** — Full Telegram tracker (Telethon)
+- [ ] **Phase 3** — Discord bot (channel reading)
+- [ ] **Phase 3** — On-chain tracker (public RPCs)
 - [ ] **Phase 4** — TGE Radar + Snapshot Engine
 - [ ] **Phase 4** — Wallet scoring simulator
-- [ ] **Phase 5** — Interface web légère (FastAPI)
+- [ ] **Phase 5** — Lightweight web interface (FastAPI)
 
 ---
 
-## Contribution
+## Contributing
 
-Les PRs sont les bienvenues. Ce projet est personnel avant tout — teste, fork, adapte.
+PRs are welcome. This is a personal project first and foremost — test it, fork it, adapt it.
 
 ---
 
-## Licence
+## License
 
-MIT — Libre d'utilisation, modification et distribution.
+MIT — Free to use, modify and distribute.
 
 ---
 
