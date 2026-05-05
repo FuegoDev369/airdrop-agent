@@ -2,11 +2,8 @@ name: AirdropAgent — Run Autonome
 
 on:
   schedule:
-    # Toutes les 2 heures (synchronisé avec run_interval_hours dans settings.yaml)
-    # Modifie le cron ici si tu changes la fréquence dans settings.yaml
     - cron: '0 */2 * * *'
 
-  # Lancement manuel depuis l'interface GitHub (onglet Actions)
   workflow_dispatch:
     inputs:
       debug_mode:
@@ -21,75 +18,64 @@ on:
 jobs:
   run-agent:
     runs-on: ubuntu-latest
-    timeout-minutes: 30      # Sécurité : kill si > 30 min
+    timeout-minutes: 30
 
     permissions:
-      contents: write         # Nécessaire pour commit la DB (Option A si migration future)
+      contents: write
 
     steps:
-      # ── 1. Checkout du repo ────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Setup Python ────────────────────────────────────
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      # ── 3. Installation des dépendances ────────────────────
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ── 4. Restaurer la DB depuis le dernier artifact ──────
-      # (Option B — GitHub Artifacts)
-      # continue-on-error: true car premier run = pas encore d'artifact
+      # Crée data/ avant le download — évite toute erreur de chemin
+      - name: Prepare data directory
+        run: mkdir -p data/
+
       - name: Restore agent database
         uses: actions/download-artifact@v4
         with:
           name: agent-db
           path: data/
-        continue-on-error: true
+        continue-on-error: true   # Normal au premier run : artifact inexistant
 
-      # ── 5. Lancer l'agent ──────────────────────────────────
       - name: Run AirdropAgent
         env:
-          # LLM
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # PYTHONPATH = racine du repo — résout tous les imports inter-modules
+          PYTHONPATH: ${{ github.workspace }}
 
-          # Notifications Discord
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-
-          # Notifications Telegram
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-
-          # Telegram API (pour tracker les canaux — optionnel Phase 3)
-          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
-          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-          TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
-
-          # Debug
+          GROQ_API_KEY:             ${{ secrets.GROQ_API_KEY }}
+          DISCORD_WEBHOOK:          ${{ secrets.DISCORD_WEBHOOK }}
+          TELEGRAM_BOT_TOKEN:       ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:         ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_API_ID:          ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH:        ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_SESSION_STRING:  ${{ secrets.TELEGRAM_SESSION_STRING }}
           LOG_LEVEL: ${{ github.event.inputs.debug_mode == 'true' && 'DEBUG' || 'INFO' }}
 
         run: python -m core.agent
 
-      # ── 6. Sauvegarder la DB mise à jour (Option B) ────────
+      # Sauvegarde toujours la DB — même si le run a planté partiellement
       - name: Save agent database
         uses: actions/upload-artifact@v4
-        if: always()     # Sauvegarder même si le run a eu des erreurs
+        if: always()
         with:
           name: agent-db
           path: data/agent.db
-          retention-days: 90     # Garder 90 jours d'historique
+          retention-days: 90
 
-      # ── 7. Résumé du run ───────────────────────────────────
       - name: Run summary
         if: always()
         run: |
           echo "## AirdropAgent Run Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Date** : $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
           echo "- **Trigger** : ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Status** : ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
