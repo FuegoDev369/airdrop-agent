@@ -1,10 +1,16 @@
 """
-llm_engine.py
+llm_engine.py — v1.2
 Interface unifiée LLM — switch Groq (cloud) / Ollama (local)
-selon la configuration dans settings.yaml
+
+CHANGELOG v1.2 :
+  - Délai configurable entre appels (request_delay_seconds)
+    pour réduire les 429 Too Many Requests sur le plan gratuit Groq
+  - generate_tweet() forcé en anglais
+  - generate_daily_brief() et notify messages en langue configurable
 """
 
 import os
+import time
 import json
 import logging
 from typing import Optional
@@ -17,6 +23,14 @@ class LLMEngine:
         self.mode = config["llm"]["mode"]
         self.cfg = config["llm"][self.mode]
         self._client = None
+
+        # Délai entre appels — réduit les 429 sur plan gratuit Groq
+        self.request_delay = self.cfg.get("request_delay_seconds", 0.5)
+
+        # Langue des outputs (hors tweets)
+        lang_cfg = config.get("language", {})
+        self.notification_language = lang_cfg.get("notification_language", "en")
+
         logger.info(f"LLM Engine initialisé en mode : {self.mode}")
 
     def _get_groq_client(self):
@@ -67,10 +81,12 @@ class LLMEngine:
             resp.raise_for_status()
             return resp.json()["response"].strip()
         except ImportError:
-            raise ImportError("Package 'requests' manquant. Lance : pip install requests")
+            raise ImportError("Package 'requests' manquant.")
 
     def call(self, prompt: str, system: str = "") -> str:
-        """Appel LLM unifié — utilise le backend configuré."""
+        """Appel LLM unifié avec délai anti-429."""
+        if self.request_delay > 0:
+            time.sleep(self.request_delay)
         try:
             if self.mode == "groq":
                 return self._call_groq(prompt, system)
@@ -87,35 +103,45 @@ class LLMEngine:
     def classify_signal(self, content: str, project_name: str) -> dict:
         """
         Classifie un signal et lui attribue un score d'urgence.
-        Retourne: { signal_type, urgency_score, summary, action_required }
+        Toujours en anglais en interne (JSON structuré).
         """
-        system = """Tu es un analyste expert en projets Web3 et airdrops crypto.
-Tu analyses des signaux (tweets, annonces, messages Discord/Telegram) pour un tracker d'airdrop.
-Tu réponds UNIQUEMENT en JSON valide, sans markdown, sans explication."""
+        system = (
+            "You are an expert Web3 analyst specializing in airdrops. "
+            "You analyze signals (tweets, Discord/Telegram messages) for an airdrop tracker. "
+            "Reply ONLY with valid JSON, no markdown, no explanation."
+        )
 
-        prompt = f"""Analyse ce signal pour le projet "{project_name}" :
+        # Le résumé et l'action sont générés dans la langue de notification
+        lang_note = (
+            "Write 'summary' and 'action_required' in French."
+            if self.notification_language == "fr"
+            else f"Write 'summary' and 'action_required' in English."
+        )
 
-CONTENU : {content[:1500]}
+        prompt = f"""Analyze this signal for project "{project_name}":
 
-Retourne exactement ce JSON :
+CONTENT: {content[:1500]}
+
+{lang_note}
+
+Return exactly this JSON:
 {{
   "signal_type": "quest|snapshot|tge_signal|major_announcement|regular_update|hype|irrelevant",
-  "urgency_score": <entier 1-10>,
-  "summary": "<résumé en 1 phrase max>",
-  "action_required": "<action concrète suggérée ou null>",
-  "keywords": ["<mot-clé1>", "<mot-clé2>"]
+  "urgency_score": <integer 1-10>,
+  "summary": "<1 sentence summary in the configured language>",
+  "action_required": "<concrete action to take or null>",
+  "keywords": ["<keyword1>", "<keyword2>"]
 }}
 
-Règles de scoring urgence :
-- 9-10 : snapshot imminent, TGE annoncé, quête qui expire < 24h
-- 7-8  : nouvelle quête, annonce majeure, nouveau testnet
-- 5-6  : mise à jour importante, partenariat
-- 3-4  : update régulière, contenu informatif
-- 1-2  : hype générale, bruit, non pertinent"""
+Urgency scoring:
+- 9-10: imminent snapshot, TGE announced, quest expiring < 24h
+- 7-8 : new quest, major announcement, new testnet
+- 5-6 : important update, partnership
+- 3-4 : regular update, informational content
+- 1-2 : general hype, noise, irrelevant"""
 
         try:
             response = self.call(prompt, system)
-            # Nettoyer les éventuels backticks markdown
             clean = response.strip().strip("```json").strip("```").strip()
             return json.loads(clean)
         except (json.JSONDecodeError, Exception) as e:
@@ -128,69 +154,82 @@ Règles de scoring urgence :
                 "keywords": []
             }
 
-    def generate_tweet(self, project_name: str, context: str, language: str = "fr") -> str:
-        """Génère un tweet authentique et engagé pour un projet."""
-        lang_instruction = "en français" if language == "fr" else "in English"
+    def generate_tweet(self, project_name: str, context: str, language: str = "en") -> str:
+        """
+        Génère un tweet authentique et engagé.
+        TOUJOURS en anglais — langue de la crypto sur Twitter/X.
+        Le paramètre language est accepté mais ignoré (toujours "en").
+        """
+        # Forcé anglais — indépendant de la config notification_language
+        system = (
+            "You are a genuine Web3 community member passionate about crypto projects. "
+            "You write authentic English tweets, never generic. "
+            "Your tweets show real understanding of the project. "
+            "NEVER use spam hashtags. Maximum 2 relevant hashtags. "
+            "Reply only with the tweet text, no quotes."
+        )
 
-        system = f"""Tu es un vrai membre passionné de la communauté Web3.
-Tu génères des tweets authentiques {lang_instruction}, jamais génériques.
-Tes tweets montrent une vraie compréhension du projet.
-Tu n'utilises JAMAIS de hashtags spam. Maximum 2 hashtags pertinents.
-Tu réponds uniquement avec le texte du tweet, sans guillemets."""
+        prompt = f"""Write an engaging tweet for the project "{project_name}".
 
-        prompt = f"""Génère un tweet engagé pour le projet "{project_name}".
-
-Contexte récent du projet :
+Recent project context:
 {context[:800]}
 
-Contraintes :
-- Maximum 260 caractères
-- Ton authentique, pas corporate
-- Montre une vraie connaissance du projet
-- Peut inclure une question pour engager la communauté
-- 1-2 hashtags maximum et pertinents"""
+Constraints:
+- Maximum 260 characters
+- Authentic tone, not corporate
+- Shows real knowledge of the project
+- Can include a question to engage the community
+- 1-2 maximum relevant hashtags
+- ALWAYS in English"""
 
         return self.call(prompt, system)
 
     def generate_daily_brief(self, projects_data: list) -> str:
-        """Génère un briefing quotidien structuré pour tous les projets."""
-        system = """Tu es l'assistant d'un airdrop farmer sérieux.
-Tu génères des briefings clairs, actionnables et priorisés.
-Tu es direct et concis. Tu réponds en français."""
+        """Génère un briefing quotidien dans la langue configurée."""
+        lang = self.notification_language
+        lang_instruction = "in French" if lang == "fr" else "in English"
+
+        system = (
+            f"You are the assistant of a serious airdrop farmer. "
+            f"Generate clear, actionable, prioritized briefings {lang_instruction}. "
+            f"Be direct and concise."
+        )
 
         projects_summary = json.dumps(projects_data, ensure_ascii=False, indent=2)
 
-        prompt = f"""Génère un briefing quotidien basé sur ces données de projets :
+        prompt = f"""Generate a daily briefing based on this project data:
 
 {projects_summary[:2000]}
 
-Structure ton briefing ainsi :
+Structure your briefing as:
 1. 🔴 URGENT (actions < 24h)
-2. 🟡 AUJOURD'HUI (actions recommandées)
-3. 🟢 VEILLE (rien d'urgent)
-4. 💡 CONSEIL DU JOUR (1 tip stratégique)
+2. 🟡 TODAY (recommended actions)
+3. 🟢 WATCH (nothing urgent)
+4. 💡 TIP OF THE DAY (1 strategic tip)
 
-Sois concis et actionnable."""
+Be concise and actionable. Write {lang_instruction}."""
 
         return self.call(prompt, system)
 
     def score_wallet_eligibility(self, project_name: str, wallet_activity: dict) -> dict:
         """Estime le score d'éligibilité d'un wallet pour un airdrop."""
-        system = """Tu es un expert en tokenomics et critères d'éligibilité airdrop.
-Tu analyses l'activité d'un wallet et estimes sa position probable dans une distribution.
-Tu réponds en JSON uniquement."""
+        system = (
+            "You are an expert in tokenomics and airdrop eligibility criteria. "
+            "Analyze wallet activity and estimate its position in a distribution. "
+            "Reply in JSON only."
+        )
 
-        prompt = f"""Estime l'éligibilité de ce wallet pour l'airdrop de "{project_name}" :
+        prompt = f"""Estimate eligibility for "{project_name}" airdrop:
 
-Activité wallet : {json.dumps(wallet_activity, ensure_ascii=False)}
+Wallet activity: {json.dumps(wallet_activity, ensure_ascii=False)}
 
-Retourne :
+Return:
 {{
   "score_estimate": <0-100>,
   "tier": "top_1pct|top_5pct|top_20pct|eligible|low|unknown",
-  "strengths": ["<point fort>"],
-  "weaknesses": ["<point faible>"],
-  "recommended_actions": ["<action pour améliorer>"]
+  "strengths": ["<strength>"],
+  "weaknesses": ["<weakness>"],
+  "recommended_actions": ["<action to improve>"]
 }}"""
 
         try:
@@ -199,4 +238,10 @@ Retourne :
             return json.loads(clean)
         except Exception as e:
             logger.warning(f"Erreur scoring wallet : {e}")
-            return {"score_estimate": 0, "tier": "unknown", "strengths": [], "weaknesses": [], "recommended_actions": []}
+            return {
+                "score_estimate": 0,
+                "tier": "unknown",
+                "strengths": [],
+                "weaknesses": [],
+                "recommended_actions": []
+            }

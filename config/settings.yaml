@@ -1,77 +1,90 @@
 # ============================================================
-#  AirdropAgent — Configuration Principale
+#  AirdropAgent — Configuration Principale v1.2
 #  Modifie ce fichier selon tes besoins.
 #  Aucun changement de code source requis.
 # ============================================================
 
 agent:
   name: "AirdropAgent"
-  version: "1.0.0"
-  run_interval_hours: 2        # Fréquence de la boucle (synchronisé avec GitHub Actions)
-  log_level: "INFO"            # DEBUG | INFO | WARNING | ERROR
+  version: "1.2.0"
+  run_interval_hours: 2
+  log_level: "INFO"
   timezone: "Africa/Porto-Novo"
 
 # ------------------------------------------------------------
 #  LLM Backend
-#  mode: "groq" pour GitHub Actions (recommandé)
-#         "ollama" pour usage local Termux
 # ------------------------------------------------------------
 llm:
-  mode: "groq"                 # "groq" | "ollama"
+  mode: "groq"
   groq:
-    model: "llama-3.3-70b-versatile"   # Modèle Groq recommandé
+    model: "llama-3.3-70b-versatile"    # Modèle actif Groq (maj v1.2)
     max_tokens: 1024
     temperature: 0.7
+    # Délai entre appels LLM pour éviter les 429 Too Many Requests
+    # Le plan gratuit Groq = ~6000 tokens/min → un délai de 0.5s suffit
+    request_delay_seconds: 0.5
   ollama:
     model: "mistral"
     base_url: "http://localhost:11434"
     max_tokens: 1024
     temperature: 0.7
+    request_delay_seconds: 0
+
+# ------------------------------------------------------------
+#  Langue des outputs
+#
+#  tweet_language   : langue des tweets générés
+#                     TOUJOURS "en" — l'anglais est la langue
+#                     de la crypto sur Twitter/X
+#
+#  notification_language : langue des alertes, briefings et
+#                          suggestions d'actions Discord/Telegram
+#                          "en" par défaut | "fr" | "es" | etc.
+# ------------------------------------------------------------
+language:
+  tweet_language: "en"              # NE PAS CHANGER — toujours anglais
+  notification_language: "en"       # Changer selon ta préférence
 
 # ------------------------------------------------------------
 #  Notifications
-#  Configure tes canaux ici. Les secrets (tokens, URLs)
-#  doivent être dans les GitHub Secrets — jamais ici.
 # ------------------------------------------------------------
 notifications:
   discord:
     enabled: true
-    # DISCORD_WEBHOOK doit être dans GitHub Secrets
-    mention_on_urgent: true    # Envoie @everyone si urgence haute
-    daily_brief: true          # Briefing quotidien activé
-    action_suggestions: true   # Tweets générés et actions suggérées
-    quest_alerts: true         # Alertes nouvelles quêtes
-
-  telegram:
-    enabled: true
-    # TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID dans GitHub Secrets
+    mention_on_urgent: true
     daily_brief: true
     action_suggestions: true
     quest_alerts: true
-    snapshot_alerts: true      # Alertes snapshot/TGE imminents
 
-  urgency_threshold: 7         # Score min (sur 10) pour alerte immédiate
+  telegram:
+    enabled: true
+    daily_brief: true
+    action_suggestions: true
+    quest_alerts: true
+    snapshot_alerts: true
+
+  urgency_threshold: 7
 
 # ------------------------------------------------------------
 #  Projets suivis
-#  Ajoute ici les projets que tu veux tracker.
-#  Tu peux aussi utiliser : python -m airdrop_agent add-project
 # ------------------------------------------------------------
 projects:
   - name: "DAC | Quantum Chain"
     twitter_handle: "dac_chain"
-    discord_invite: "dacchain"        # Partie après discord.gg/
-    telegram_handle: "dac_chain"
-    chain: "dac-testnet"
+    discord_invite: ""
+    telegram_handle: ""
+    website_url: "https://dachain.io"
+    chain: "DAC-L1"
     contract_address: null
-    tge_date: null                 # Format: "2026-06-01" ou null
-    priority: 9                    # 1 (bas) à 10 (critique)
-    tags: ["L1", "testnet", "high-potential"]
+    tge_date: null
+    priority: 9
+    tags: ["L1", "quantum", "testnet"]
 
   - name: "BERACHAIN"
     twitter_handle: "berachain"
     discord_invite: "berachain"
     telegram_handle: "BerachainOfficial"
+    website_url: "https://berachain.com"
     chain: "berachain"
     contract_address: null
     tge_date: null
@@ -80,16 +93,15 @@ projects:
 
 # ------------------------------------------------------------
 #  Scraping Twitter (via instances Nitter)
-#  Les instances sont testées dans l'ordre — fallback auto.
 # ------------------------------------------------------------
 twitter:
-  tweets_per_project: 15       # Nombre de tweets récupérés par run
+  tweets_per_project: 15
   nitter_instances:
     - "https://nitter.net"
     - "https://nitter.privacydev.net"
     - "https://nitter.poast.org"
     - "https://nitter.1d4.us"
-  request_delay_seconds: 2     # Délai entre requêtes (comportement humain)
+  request_delay_seconds: 2
 
 # ------------------------------------------------------------
 #  Scoring & Analyse
@@ -104,5 +116,4 @@ scoring:
     regular_update: 3
 
   content_generation:
-    tweets_per_project_per_day: 2
-    languages: ["fr", "en"]    # Langues des tweets générés
+    tweets_per_project_per_day: 1     # 1 tweet EN par projet par run

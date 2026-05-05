@@ -1,7 +1,12 @@
 """
-content_engine.py
-Moteur de génération de contenu — tweets, suggestions d'actions Discord,
-messages communautaires. Basé sur le contexte récent de chaque projet.
+content_engine.py — v1.2
+Moteur de génération de contenu.
+
+CHANGELOG v1.2 :
+  - Tweets TOUJOURS générés en anglais (tweet_language: "en")
+  - Notifications/actions en langue configurable (notification_language)
+  - 1 seul tweet par projet par run (plus propre, moins de 429)
+  - Contexte Discord en langue configurable
 """
 
 import logging
@@ -15,65 +20,84 @@ class ContentEngine:
     def __init__(self, llm: LLMEngine, config: dict):
         self.llm = llm
         self.cfg = config.get("scoring", {}).get("content_generation", {})
-        self.tweets_per_project = self.cfg.get("tweets_per_project_per_day", 2)
-        self.languages = self.cfg.get("languages", ["fr", "en"])
+
+        # Langue des tweets — toujours anglais, non négociable
+        self.tweet_language = "en"
+
+        # Langue des notifications/actions — configurable
+        lang_cfg = config.get("language", {})
+        self.notification_language = lang_cfg.get("notification_language", "en")
+
+        logger.debug(
+            f"ContentEngine — tweets: {self.tweet_language} | "
+            f"notifications: {self.notification_language}"
+        )
 
     def build_project_context(self, project: dict, signals: list) -> str:
         """Construit le contexte d'un projet à partir de ses signaux récents."""
         if not signals:
-            return f"Projet {project['name']} — aucun signal récent disponible."
+            return f"Project: {project['name']} — no recent signals available."
 
-        top_signals = sorted(signals, key=lambda s: s.get("urgency_score", 0), reverse=True)[:5]
-        lines = [f"Projet : {project['name']} ({project.get('chain', 'blockchain')})"]
-        lines.append("Signaux récents :")
+        top_signals = sorted(
+            signals, key=lambda s: s.get("urgency_score", 0), reverse=True
+        )[:5]
+
+        lines = [f"Project: {project['name']} ({project.get('chain', 'blockchain')})"]
+        lines.append("Recent signals:")
         for s in top_signals:
             src = s.get("source", "?").upper()
             content = s.get("content", "")[:200]
             lines.append(f"  [{src}] {content}")
         return "\n".join(lines)
 
-    def generate_tweets(self, project: dict, signals: list) -> list:
+    def generate_tweet(self, project: dict, signals: list) -> Optional[str]:
         """
-        Génère des tweets pour un projet basés sur son activité récente.
-        Retourne une liste de strings (tweets prêts à poster).
+        Génère UN tweet en anglais pour un projet.
+        Les tweets sont TOUJOURS en anglais — langue de la crypto sur Twitter/X.
+        Retourne le texte du tweet ou None si échec.
         """
         context = self.build_project_context(project, signals)
-        tweets = []
+        try:
+            tweet = self.llm.generate_tweet(
+                project_name=project["name"],
+                context=context,
+                language="en",   # Forcé anglais — pas configurable
+            )
+            if tweet and len(tweet.strip()) > 10:
+                logger.info(f"Tweet EN généré pour {project['name']}")
+                return tweet.strip()
+        except Exception as e:
+            logger.warning(f"Erreur génération tweet {project['name']} : {e}")
+        return None
 
-        for lang in self.languages[:self.tweets_per_project]:
-            try:
-                tweet = self.llm.generate_tweet(
-                    project_name=project["name"],
-                    context=context,
-                    language=lang,
-                )
-                if tweet and len(tweet.strip()) > 10:
-                    tweets.append({
-                        "text": tweet.strip(),
-                        "language": lang,
-                        "project": project["name"],
-                    })
-                    logger.info(f"Tweet généré pour {project['name']} ({lang})")
-            except Exception as e:
-                logger.warning(f"Erreur génération tweet {project['name']} : {e}")
-
-        return tweets
+    # Alias pour compatibilité avec agent.py
+    def generate_tweets(self, project: dict, signals: list) -> list:
+        """Wrapper retournant une liste pour compatibilité avec agent.py."""
+        tweet = self.generate_tweet(project, signals)
+        if tweet:
+            return [{"text": tweet, "language": "en", "project": project["name"]}]
+        return []
 
     def generate_discord_action(self, project: dict, quest_signal: dict) -> Optional[str]:
-        """Génère une suggestion d'action Discord basée sur une quête détectée."""
+        """
+        Génère une suggestion d'action Discord dans la langue configurée.
+        """
+        lang = self.notification_language
+        lang_instruction = "en français" if lang == "fr" else f"in {lang}"
+
         try:
-            system = """Tu es un expert airdrop qui guide les utilisateurs sur Discord.
-Tu donnes des instructions claires et actionnables en français.
-Tu réponds uniquement avec les instructions, sans introduction."""
-
-            prompt = f"""Le projet "{project['name']}" a une activité Discord importante :
-
-Signal : {quest_signal.get('content', '')[:500]}
-
-Génère une liste d'actions concrètes (3-5 étapes max) que l'utilisateur doit faire
-sur le Discord du projet pour maximiser son engagement et ses chances d'airdrop.
-Sois spécifique et actionnable."""
-
+            system = (
+                f"You are an airdrop expert guiding users on Discord. "
+                f"Give clear, actionable instructions {lang_instruction}. "
+                f"Reply only with the instructions, no introduction."
+            )
+            prompt = (
+                f'Project "{project["name"]}" has important Discord activity:\n\n'
+                f'Signal: {quest_signal.get("content", "")[:500]}\n\n'
+                f"Generate a list of 3-5 concrete steps the user should take "
+                f"on the project's Discord to maximize engagement and airdrop chances. "
+                f"Be specific and actionable."
+            )
             return self.llm.call(prompt, system)
         except Exception as e:
             logger.warning(f"Erreur génération action Discord : {e}")
@@ -94,14 +118,22 @@ Sois spécifique et actionnable."""
             if signal_type == "quest":
                 actions.append({
                     "type": "discord_task",
-                    "description": action_required or f"Participer à la quête détectée sur {project['name']}",
+                    "description": action_required or (
+                        f"Participer à la quête détectée sur {project['name']}"
+                        if self.notification_language == "fr"
+                        else f"Participate in the detected quest on {project['name']}"
+                    ),
                     "urgency": signal.get("urgency_score", 7),
                     "source_signal": signal.get("id"),
                 })
             elif signal_type in ("snapshot", "tge_signal"):
                 actions.append({
                     "type": "onchain_tx",
-                    "description": f"URGENT : Snapshot imminent sur {project['name']} — vérifier éligibilité",
+                    "description": (
+                        f"URGENT : Snapshot imminent sur {project['name']} — vérifier éligibilité"
+                        if self.notification_language == "fr"
+                        else f"URGENT: Imminent snapshot on {project['name']} — check eligibility"
+                    ),
                     "urgency": 10,
                     "source_signal": signal.get("id"),
                 })
@@ -113,11 +145,15 @@ Sois spécifique et actionnable."""
                     "source_signal": signal.get("id"),
                 })
 
-        # Toujours ajouter une action Twitter si le projet est actif
+        # 1 tweet EN par projet par run
         if signals:
             actions.append({
                 "type": "tweet",
-                "description": f"Poster un tweet d'engagement pour {project['name']} aujourd'hui",
+                "description": (
+                    f"Poster un tweet d'engagement pour {project['name']}"
+                    if self.notification_language == "fr"
+                    else f"Post an engagement tweet for {project['name']}"
+                ),
                 "urgency": 4,
                 "source_signal": None,
             })
