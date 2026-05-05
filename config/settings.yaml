@@ -1,12 +1,10 @@
 # ============================================================
-#  AirdropAgent — Configuration Principale v1.2
-#  Modifie ce fichier selon tes besoins.
-#  Aucun changement de code source requis.
+#  AirdropAgent — Configuration Principale v1.3
 # ============================================================
 
 agent:
   name: "AirdropAgent"
-  version: "1.2.0"
+  version: "1.3.0"
   run_interval_hours: 2
   log_level: "INFO"
   timezone: "Africa/Porto-Novo"
@@ -17,12 +15,13 @@ agent:
 llm:
   mode: "groq"
   groq:
-    model: "llama-3.3-70b-versatile"    # Modèle actif Groq (maj v1.2)
+    model: "llama-3.3-70b-versatile"
     max_tokens: 1024
     temperature: 0.7
-    # Délai entre appels LLM pour éviter les 429 Too Many Requests
-    # Le plan gratuit Groq = ~6000 tokens/min → un délai de 0.5s suffit
-    request_delay_seconds: 0.5
+    # v1.3 : augmenté à 1.5s pour éliminer définitivement les 429
+    # Plan gratuit Groq = 30 req/min → 1 req toutes les 2s max
+    # 1.5s est un bon compromis vitesse/stabilité
+    request_delay_seconds: 1.5
   ollama:
     model: "mistral"
     base_url: "http://localhost:11434"
@@ -32,18 +31,10 @@ llm:
 
 # ------------------------------------------------------------
 #  Langue des outputs
-#
-#  tweet_language   : langue des tweets générés
-#                     TOUJOURS "en" — l'anglais est la langue
-#                     de la crypto sur Twitter/X
-#
-#  notification_language : langue des alertes, briefings et
-#                          suggestions d'actions Discord/Telegram
-#                          "en" par défaut | "fr" | "es" | etc.
 # ------------------------------------------------------------
 language:
-  tweet_language: "en"              # NE PAS CHANGER — toujours anglais
-  notification_language: "en"       # Changer selon ta préférence
+  tweet_language: "en"              # Toujours anglais — ne pas modifier
+  notification_language: "en"       # "fr" | "en" | "es" selon préférence
 
 # ------------------------------------------------------------
 #  Notifications
@@ -116,4 +107,4 @@ scoring:
     regular_update: 3
 
   content_generation:
-    tweets_per_project_per_day: 1     # 1 tweet EN par projet par run
+    tweets_per_project_per_day: 1
