@@ -19,7 +19,7 @@ agent:
 llm:
   mode: "groq"                 # "groq" | "ollama"
   groq:
-    model: "llama-3.1-70b-versatile"   # Modèle Groq recommandé
+    model: "llama-3.3-70b-versatile"   # Modèle Groq recommandé
     max_tokens: 1024
     temperature: 0.7
   ollama:
