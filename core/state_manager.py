@@ -1,19 +1,18 @@
 """
-state_manager.py — v1.5.1
+state_manager.py — v1.5.2
 Gestionnaire d'état persistant via SQLite.
 
-CHANGELOG v1.5.1 :
-  - deactivate_removed_projects() : désactive proprement les projets
-    supprimés de config/settings.yaml (sync bidirectionnel)
-  - sync_projects_from_config() retourne maintenant un rapport
-    {added, updated, deactivated} pour les logs
+CHANGELOG v1.5.2 :
+  - FIX : index créés APRÈS _migrate_db() — résout le crash
+    "no such column: content_hash" sur DB ancienne (v1.4 et avant)
+  - Les CREATE INDEX sont maintenant dans une étape séparée
+    exécutée après que toutes les colonnes existent garantiment
 """
 
 import sqlite3
 import json
 import hashlib
 import logging
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -32,8 +31,16 @@ def get_connection() -> sqlite3.Connection:
 
 
 def initialize_db():
-    """Crée toutes les tables si elles n'existent pas."""
+    """
+    Crée toutes les tables et index.
+    Ordre garanti :
+      1. CREATE TABLE (structure de base)
+      2. _migrate_db() (ajout colonnes manquantes sur DB existante)
+      3. CREATE INDEX (après que toutes les colonnes existent)
+    """
     with get_connection() as conn:
+
+        # ── ÉTAPE 1 : Tables uniquement, sans index ───────────
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS projects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,7 +64,7 @@ def initialize_db():
                 source TEXT NOT NULL,
                 signal_type TEXT NOT NULL,
                 content TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
+                content_hash TEXT NOT NULL DEFAULT '',
                 raw_data TEXT DEFAULT '{}',
                 urgency_score INTEGER DEFAULT 0,
                 actioned BOOLEAN DEFAULT 0,
@@ -101,7 +108,16 @@ def initialize_db():
                 status TEXT DEFAULT 'running',
                 error_log TEXT
             );
+        """)
 
+        # ── ÉTAPE 2 : Migration colonnes manquantes ───────────
+        # DOIT être avant les index pour garantir que
+        # content_hash existe avant CREATE UNIQUE INDEX
+        _migrate_db(conn)
+
+        # ── ÉTAPE 3 : Index — créés APRÈS migration ───────────
+        # IF NOT EXISTS → safe à relancer à chaque démarrage
+        conn.executescript("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_hash
                 ON signals(project_id, content_hash);
 
@@ -111,26 +127,28 @@ def initialize_db():
             CREATE INDEX IF NOT EXISTS idx_signals_notified
                 ON signals(notified, urgency_score);
         """)
-        _migrate_db(conn)
 
     logger.info(f"Base de données initialisée : {DB_PATH}")
 
 
 def _migrate_db(conn: sqlite3.Connection):
-    """Migration safe : ajoute les colonnes manquantes sur DB existante."""
+    """
+    Ajoute les colonnes manquantes sur une DB existante.
+    Safe à appeler plusieurs fois (ALTER TABLE ignoré si colonne existe).
+    """
     migrations = [
-        ("signals",    "content_hash", "TEXT NOT NULL DEFAULT ''"),
-        ("signals",    "notified",     "BOOLEAN DEFAULT 0"),
-        ("agent_runs", "signals_new",  "INTEGER DEFAULT 0"),
-        ("agent_runs", "signals_duplicate", "INTEGER DEFAULT 0"),
-        ("projects",   "website_url",  "TEXT"),
+        ("signals",    "content_hash",      "TEXT NOT NULL DEFAULT ''"),
+        ("signals",    "notified",           "BOOLEAN DEFAULT 0"),
+        ("agent_runs", "signals_new",        "INTEGER DEFAULT 0"),
+        ("agent_runs", "signals_duplicate",  "INTEGER DEFAULT 0"),
+        ("projects",   "website_url",        "TEXT"),
     ]
     for table, column, col_def in migrations:
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
-            logger.debug(f"Migration : {table}.{column} ajoutée")
+            logger.info(f"Migration DB : {table}.{column} ajoutée ✅")
         except sqlite3.OperationalError:
-            pass  # Colonne déjà existante
+            pass  # Colonne déjà existante — normal
 
 
 # ── Hash de déduplication ────────────────────────────────────
@@ -152,7 +170,6 @@ def signal_already_seen(project_id: int, content_hash: str) -> bool:
 # ── Projets ──────────────────────────────────────────────────
 
 def upsert_project(project: dict) -> int:
-    """Insert ou met à jour un projet. Retourne son id."""
     with get_connection() as conn:
         existing = conn.execute(
             "SELECT id FROM projects WHERE name = ?", (project["name"],)
@@ -199,26 +216,20 @@ def upsert_project(project: dict) -> int:
             return cursor.lastrowid
 
 
-def deactivate_removed_projects(active_names: list[str]) -> list[str]:
+def deactivate_removed_projects(active_names: list) -> list:
     """
-    Désactive tous les projets en DB qui ne sont plus dans active_names.
-    Appelé à chaque run avec la liste des projets du settings.yaml.
-
-    Retourne la liste des noms désactivés (pour les logs).
+    Désactive les projets en DB absents de active_names.
+    Sécurité : ne fait rien si active_names est vide.
     """
     if not active_names:
-        # Sécurité : si la liste est vide (ex: settings.yaml mal parsé),
-        # on ne désactive rien pour éviter de tout éteindre par accident.
-        logger.warning("deactivate_removed_projects : liste vide reçue — aucune désactivation")
+        logger.warning("deactivate_removed_projects : liste vide — aucune désactivation")
         return []
 
     with get_connection() as conn:
-        # Trouver les projets actifs en DB absents de la config
         placeholders = ",".join("?" * len(active_names))
         rows = conn.execute(f"""
             SELECT name FROM projects
-            WHERE active = 1
-              AND name NOT IN ({placeholders})
+            WHERE active = 1 AND name NOT IN ({placeholders})
         """, active_names).fetchall()
 
         removed = [row["name"] for row in rows]
@@ -242,19 +253,9 @@ def get_active_projects() -> list:
         return [dict(r) for r in rows]
 
 
-def get_all_projects() -> list:
-    """Retourne tous les projets y compris inactifs (pour audit/debug)."""
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT * FROM projects ORDER BY active DESC, priority DESC"
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
 # ── Signaux ──────────────────────────────────────────────────
 
 def insert_signal(signal: dict) -> Optional[int]:
-    """Insert un signal. Retourne l'id ou None si doublon."""
     with get_connection() as conn:
         try:
             cursor = conn.execute("""
@@ -280,9 +281,7 @@ def get_unnotified_urgent_signals(project_id: int, min_urgency: int = 7) -> list
     with get_connection() as conn:
         rows = conn.execute("""
             SELECT * FROM signals
-            WHERE project_id = ?
-              AND urgency_score >= ?
-              AND notified = 0
+            WHERE project_id = ? AND urgency_score >= ? AND notified = 0
             ORDER BY urgency_score DESC, collected_at DESC
             LIMIT 5
         """, (project_id, min_urgency)).fetchall()
