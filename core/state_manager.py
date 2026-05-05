@@ -1,12 +1,13 @@
 """
-state_manager.py — v1.5.2
+state_manager.py — v1.5.3
 Gestionnaire d'état persistant via SQLite.
 
-CHANGELOG v1.5.2 :
-  - FIX : index créés APRÈS _migrate_db() — résout le crash
-    "no such column: content_hash" sur DB ancienne (v1.4 et avant)
-  - Les CREATE INDEX sont maintenant dans une étape séparée
-    exécutée après que toutes les colonnes existent garantiment
+CHANGELOG v1.5.3 :
+  - FIX : purge des signaux avec content_hash='' AVANT CREATE UNIQUE INDEX
+    Les anciens signaux (v1.4 et avant) ont tous content_hash='' ce qui
+    cause une violation UNIQUE constraint à la création de l'index.
+    Solution : on les supprime proprement — ils sont de toute façon
+    inutilisables pour la déduplication (hash manquant).
 """
 
 import sqlite3
@@ -32,15 +33,15 @@ def get_connection() -> sqlite3.Connection:
 
 def initialize_db():
     """
-    Crée toutes les tables et index.
-    Ordre garanti :
-      1. CREATE TABLE (structure de base)
-      2. _migrate_db() (ajout colonnes manquantes sur DB existante)
-      3. CREATE INDEX (après que toutes les colonnes existent)
+    Initialisation DB en 4 étapes garanties dans l'ordre :
+      1. CREATE TABLE   — structure de base
+      2. _migrate_db()  — ajout colonnes manquantes
+      3. _purge_legacy_signals() — supprime anciens signaux sans hash
+      4. CREATE INDEX   — après migration ET purge
     """
     with get_connection() as conn:
 
-        # ── ÉTAPE 1 : Tables uniquement, sans index ───────────
+        # ── ÉTAPE 1 : Tables ──────────────────────────────────
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS projects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,12 +112,14 @@ def initialize_db():
         """)
 
         # ── ÉTAPE 2 : Migration colonnes manquantes ───────────
-        # DOIT être avant les index pour garantir que
-        # content_hash existe avant CREATE UNIQUE INDEX
         _migrate_db(conn)
 
-        # ── ÉTAPE 3 : Index — créés APRÈS migration ───────────
-        # IF NOT EXISTS → safe à relancer à chaque démarrage
+        # ── ÉTAPE 3 : Purge signaux legacy sans hash ──────────
+        # Les signaux v1.4 ont content_hash='' → doublons sur l'index unique
+        # On les supprime avant de créer l'index.
+        _purge_legacy_signals(conn)
+
+        # ── ÉTAPE 4 : Index — après migration ET purge ────────
         conn.executescript("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_hash
                 ON signals(project_id, content_hash);
@@ -132,23 +135,36 @@ def initialize_db():
 
 
 def _migrate_db(conn: sqlite3.Connection):
-    """
-    Ajoute les colonnes manquantes sur une DB existante.
-    Safe à appeler plusieurs fois (ALTER TABLE ignoré si colonne existe).
-    """
+    """Ajoute les colonnes manquantes sur DB existante. Safe à rejouer."""
     migrations = [
-        ("signals",    "content_hash",      "TEXT NOT NULL DEFAULT ''"),
-        ("signals",    "notified",           "BOOLEAN DEFAULT 0"),
-        ("agent_runs", "signals_new",        "INTEGER DEFAULT 0"),
-        ("agent_runs", "signals_duplicate",  "INTEGER DEFAULT 0"),
-        ("projects",   "website_url",        "TEXT"),
+        ("signals",    "content_hash",     "TEXT NOT NULL DEFAULT ''"),
+        ("signals",    "notified",          "BOOLEAN DEFAULT 0"),
+        ("agent_runs", "signals_new",       "INTEGER DEFAULT 0"),
+        ("agent_runs", "signals_duplicate", "INTEGER DEFAULT 0"),
+        ("projects",   "website_url",       "TEXT"),
     ]
     for table, column, col_def in migrations:
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
             logger.info(f"Migration DB : {table}.{column} ajoutée ✅")
         except sqlite3.OperationalError:
-            pass  # Colonne déjà existante — normal
+            pass  # Colonne déjà existante
+
+
+def _purge_legacy_signals(conn: sqlite3.Connection):
+    """
+    Supprime les signaux dont content_hash='' (anciens signaux v1.4).
+    Nécessaire pour permettre la création de l'index UNIQUE.
+    Ces signaux sont inutilisables pour la déduplication de toute façon.
+    """
+    result = conn.execute(
+        "DELETE FROM signals WHERE content_hash = ''"
+    )
+    if result.rowcount > 0:
+        logger.info(
+            f"Purge legacy : {result.rowcount} ancien(s) signal(s) sans hash supprimé(s) "
+            f"(migration v1.4→v1.5)"
+        )
 
 
 # ── Hash de déduplication ────────────────────────────────────
@@ -217,10 +233,6 @@ def upsert_project(project: dict) -> int:
 
 
 def deactivate_removed_projects(active_names: list) -> list:
-    """
-    Désactive les projets en DB absents de active_names.
-    Sécurité : ne fait rien si active_names est vide.
-    """
     if not active_names:
         logger.warning("deactivate_removed_projects : liste vide — aucune désactivation")
         return []
@@ -274,7 +286,7 @@ def insert_signal(signal: dict) -> Optional[int]:
             ))
             return cursor.lastrowid
         except sqlite3.IntegrityError:
-            return None  # Doublon ignoré
+            return None
 
 
 def get_unnotified_urgent_signals(project_id: int, min_urgency: int = 7) -> list:
