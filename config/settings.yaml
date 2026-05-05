@@ -62,7 +62,7 @@ notifications:
 projects:
   - name: "DAC | Quantum Chain"
     twitter_handle: "dac_chain"
-    discord_invite: ""
+    discord_invite: "dac_chain"
     telegram_handle: ""
     website_url: "https://dachain.io"
     chain: "DAC-L1"
@@ -71,16 +71,16 @@ projects:
     priority: 9
     tags: ["L1", "quantum", "testnet"]
 
-  - name: "BERACHAIN"
-    twitter_handle: "berachain"
-    discord_invite: "berachain"
-    telegram_handle: "BerachainOfficial"
-    website_url: "https://berachain.com"
-    chain: "berachain"
+  - name: "TENAZ"
+    twitter_handle: "minetenaz"
+    discord_invite: ""
+    telegram_handle: ""
+    website_url: "https://minetenaz.com"
+    chain: "tenaz"
     contract_address: null
     tge_date: null
     priority: 8
-    tags: ["L1", "DeFi", "mainnet"]
+    tags: ["L1", "DeFi", "mining", "SocialFi", "mobile"]
 
 # ------------------------------------------------------------
 #  Scraping Twitter (via instances Nitter)
