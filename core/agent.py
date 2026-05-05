@@ -1,11 +1,11 @@
 """
-agent.py — v1.5.1
+agent.py — v1.6.1
 Orchestrateur principal d'AirdropAgent.
 
-CHANGELOG v1.5.1 :
-  - sync_projects_from_config() fait maintenant un sync BIDIRECTIONNEL :
-    les projets supprimés de settings.yaml sont automatiquement
-    désactivés en DB → plus de tracking fantôme
+CHANGELOG v1.6.1 :
+  - Logs de diagnostic explicites pour Telegram Tracker
+  - Vérification et log de l'état de connexion Telegram au démarrage
+  - Log clair si telegram_handle manquant dans settings.yaml
 """
 
 import yaml
@@ -46,56 +46,30 @@ def load_config() -> dict:
 
 
 def sync_projects_from_config(config: dict) -> dict:
-    """
-    Synchronisation BIDIRECTIONNELLE entre settings.yaml et la DB.
-
-    - Projets dans config → upsert (ajout ou mise à jour)
-    - Projets en DB absents de config → désactivés (active = 0)
-
-    Retourne un rapport : {added_or_updated, deactivated}
-    """
     projects = config.get("projects", [])
     active_names = [p["name"] for p in projects]
-
-    # 1. Upsert tous les projets de la config
     for project in projects:
         upsert_project(project)
-
-    # 2. Désactiver ceux qui ne sont plus dans la config
     deactivated = deactivate_removed_projects(active_names)
-
-    report = {
-        "active":      len(active_names),
-        "deactivated": len(deactivated),
-    }
-
     if deactivated:
-        logger.info(
-            f"Sync projets : {len(active_names)} actifs | "
-            f"{len(deactivated)} désactivé(s) : {deactivated}"
-        )
+        logger.info(f"Sync projets : {len(active_names)} actifs | désactivés : {deactivated}")
     else:
         logger.info(f"Sync projets : {len(active_names)} actif(s), aucun désactivé")
-
-    return report
+    return {"active": len(active_names), "deactivated": len(deactivated)}
 
 
 def collect_and_deduplicate(project: dict, trackers: dict, llm: LLMEngine) -> dict:
-    """
-    Collecte, déduplique et classifie en batch les signaux d'un projet.
-    """
-    project_id = project["id"]
+    project_id   = project["id"]
     project_name = project["name"]
-    new_signals = []
+    new_signals  = []
     duplicate_count = 0
 
     # ── Twitter ──────────────────────────────────────────────
-    twitter_handle = project.get("twitter_handle")
+    twitter_handle = project.get("twitter_handle", "").strip()
     if twitter_handle and trackers.get("twitter"):
         try:
             raw_tweets = trackers["twitter"].get_tweets(twitter_handle)
             fresh_tweets = []
-
             for tweet in raw_tweets:
                 content = tweet.get("content", "")
                 if not content or len(content) < 10:
@@ -115,7 +89,6 @@ def collect_and_deduplicate(project: dict, trackers: dict, llm: LLMEngine) -> di
             if fresh_tweets:
                 contents = [t["content"] for t in fresh_tweets]
                 classifications = llm.classify_signals_batch(contents, project_name)
-
                 for tweet, classif in zip(fresh_tweets, classifications):
                     signal = {
                         "project_id":      project_id,
@@ -127,20 +100,31 @@ def collect_and_deduplicate(project: dict, trackers: dict, llm: LLMEngine) -> di
                         "urgency_score":   classif.get("urgency_score", 2),
                         "action_required": classif.get("action_required"),
                     }
-                    signal_id = insert_signal(signal)
-                    if signal_id:
-                        signal["id"] = signal_id
+                    sid = insert_signal(signal)
+                    if sid:
+                        signal["id"] = sid
                         new_signals.append(signal)
-
         except Exception as e:
             logger.warning(f"Twitter tracker — {project_name} : {e}")
             logger.debug(traceback.format_exc())
+    elif not twitter_handle:
+        logger.debug(f"{project_name} : twitter_handle vide — Twitter ignoré")
 
     # ── Telegram ─────────────────────────────────────────────
-    telegram_handle = project.get("telegram_handle")
-    if telegram_handle and trackers.get("telegram"):
+    telegram_handle = project.get("telegram_handle", "").strip()
+    tg_tracker = trackers.get("telegram")
+
+    # Diagnostic explicite
+    if not telegram_handle:
+        logger.info(f"{project_name} : telegram_handle non configuré dans settings.yaml — Telegram ignoré")
+    elif not tg_tracker:
+        logger.warning(f"{project_name} : TelegramTracker non disponible")
+    elif not tg_tracker.enabled:
+        logger.info(f"{project_name} : TelegramTracker désactivé (secrets manquants)")
+    else:
+        logger.info(f"{project_name} : lecture Telegram @{telegram_handle}...")
         try:
-            raw_messages = trackers["telegram"].get_messages(telegram_handle, limit=15)
+            raw_messages = tg_tracker.get_messages(telegram_handle, limit=20)
             fresh_messages = []
             tg_dupes = 0
 
@@ -164,7 +148,6 @@ def collect_and_deduplicate(project: dict, trackers: dict, llm: LLMEngine) -> di
             if fresh_messages:
                 contents = [m["content"] for m in fresh_messages]
                 classifications = llm.classify_signals_batch(contents, project_name)
-
                 for msg, classif in zip(fresh_messages, classifications):
                     signal = {
                         "project_id":      project_id,
@@ -172,17 +155,18 @@ def collect_and_deduplicate(project: dict, trackers: dict, llm: LLMEngine) -> di
                         "signal_type":     classif.get("signal_type", "regular_update"),
                         "content":         classif.get("summary", msg["content"][:300]),
                         "content_hash":    msg["_hash"],
-                        "raw_data":        {"original": msg["content"]},
+                        "raw_data":        {"original": msg["content"], "url": msg.get("url", "")},
                         "urgency_score":   classif.get("urgency_score", 2),
                         "action_required": classif.get("action_required"),
                     }
-                    signal_id = insert_signal(signal)
-                    if signal_id:
-                        signal["id"] = signal_id
+                    sid = insert_signal(signal)
+                    if sid:
+                        signal["id"] = sid
                         new_signals.append(signal)
 
         except Exception as e:
             logger.warning(f"Telegram tracker — {project_name} : {e}")
+            logger.debug(traceback.format_exc())
 
     return {"new": new_signals, "duplicate": duplicate_count}
 
@@ -190,7 +174,6 @@ def collect_and_deduplicate(project: dict, trackers: dict, llm: LLMEngine) -> di
 def generate_actions(project: dict, signals: list, content_engine: ContentEngine) -> list:
     action_plan = content_engine.generate_action_plan(project, signals)
     inserted = []
-
     for action in action_plan:
         action_data = {
             "project_id":        project["id"],
@@ -205,10 +188,8 @@ def generate_actions(project: dict, signals: list, content_engine: ContentEngine
                     action_data["generated_content"] = tweets[0]["text"]
             except Exception as e:
                 logger.warning(f"Génération tweet {project['name']} : {e}")
-
         action_data["id"] = insert_action(action_data)
         inserted.append(action_data)
-
     return inserted
 
 
@@ -237,9 +218,7 @@ def run_agent():
         initialize_db()
         logger.info("Base de données initialisée ✅")
 
-        # Sync bidirectionnel — désactive les projets retirés de la config
-        sync_report = sync_projects_from_config(config)
-
+        sync_projects_from_config(config)
         run_id = start_run()
         logger.info(f"Run #{run_id} démarré")
 
@@ -249,13 +228,21 @@ def run_agent():
         notifier       = Notifier(config)
         content_engine = ContentEngine(llm, config)
 
+        # ── Instanciation trackers avec diagnostic ────────────
+        twitter_tracker  = TwitterTracker(config)
+        telegram_tracker = TelegramTrackerSync()  # lit les env vars directement
+
+        # Log état Telegram explicite
+        if telegram_tracker.enabled:
+            logger.info("TelegramTracker ✅ activé (secrets présents)")
+        else:
+            logger.info("TelegramTracker ⏸️  désactivé (secrets manquants)")
+
         trackers = {
-            "twitter":  TwitterTracker(config),
-            "telegram": TelegramTrackerSync(config),
+            "twitter":  twitter_tracker,
+            "telegram": telegram_tracker,
         }
 
-        # get_active_projects() retourne uniquement les projets active=1
-        # → les projets désactivés sont automatiquement exclus
         projects = get_active_projects()
         logger.info(f"{len(projects)} projet(s) actif(s) à traiter")
 
@@ -266,13 +253,18 @@ def run_agent():
 
         for project in projects:
             logger.info(f"--- {project['name']} ---")
+            # Log handles configurés pour ce projet
+            logger.info(
+                f"  Handles → Twitter: @{project.get('twitter_handle') or 'N/A'} | "
+                f"Telegram: @{project.get('telegram_handle') or 'non configuré'}"
+            )
+
             try:
-                result = collect_and_deduplicate(project, trackers, llm)
+                result       = collect_and_deduplicate(project, trackers, llm)
                 new_signals  = result["new"]
                 dupe_count   = result["duplicate"]
-                total_seen   = len(new_signals) + dupe_count
 
-                stats["signals_collected"]  += total_seen
+                stats["signals_collected"]  += len(new_signals) + dupe_count
                 stats["signals_new"]        += len(new_signals)
                 stats["signals_duplicate"]  += dupe_count
 
@@ -297,7 +289,6 @@ def run_agent():
                 if new_signals:
                     actions = generate_actions(project, new_signals, content_engine)
                     stats["actions_generated"] += len(actions)
-
                     tweet_actions = [
                         a for a in actions
                         if a.get("action_type") == "tweet" and a.get("generated_content")

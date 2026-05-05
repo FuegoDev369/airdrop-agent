@@ -63,7 +63,7 @@ projects:
   - name: "DAC | Quantum Chain"
     twitter_handle: "dac_chain"
     discord_invite: "dac_chain"
-    telegram_handle: ""
+    telegram_handle: "dac_chain"
     website_url: "https://dachain.io"
     chain: "DAC-L1"
     contract_address: null
