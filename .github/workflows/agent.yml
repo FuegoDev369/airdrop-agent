@@ -22,7 +22,7 @@ jobs:
 
     permissions:
       contents: write
-      actions: read      # ← NÉCESSAIRE pour lire les artifacts des runs précédents
+      actions: read
 
     steps:
       - name: Checkout repository
@@ -40,17 +40,37 @@ jobs:
       - name: Prepare data directory
         run: mkdir -p data/
 
-      # ── FIX ARTIFACT : cherche dans TOUS les runs précédents ──
-      # github-token permet de lire les artifacts cross-run.
-      # Sans lui, download-artifact@v4 cherche uniquement dans le run actuel.
+      # ── RESTORE : cherche le dernier artifact via API GitHub ──
+      # download-artifact@v4 ne peut pas chercher cross-run sans run-id explicite.
+      # On utilise l'API REST GitHub pour trouver le run-id du dernier artifact
+      # agent-db disponible, puis on le télécharge manuellement.
       - name: Restore agent database
-        uses: actions/download-artifact@v4
-        with:
-          name: agent-db
-          path: data/
-          github-token: ${{ secrets.GITHUB_TOKEN }}   # ← LA CLÉ DU FIX
-          run-id: ${{ github.event.workflow_run.id }}  # ← run précédent
-        continue-on-error: true   # Normal au 1er run de tous les temps
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Recherche du dernier artifact agent-db..."
+
+          # Récupère la liste des artifacts du repo via API GitHub
+          ARTIFACTS=$(gh api \
+            "repos/${{ github.repository }}/actions/artifacts?name=agent-db&per_page=5" \
+            --jq '.artifacts | map(select(.expired == false)) | sort_by(.created_at) | reverse | .[0]')
+
+          if [ -z "$ARTIFACTS" ] || [ "$ARTIFACTS" = "null" ]; then
+            echo "Aucun artifact trouvé — premier run ou artifacts expirés. DB sera créée."
+            exit 0
+          fi
+
+          ARTIFACT_ID=$(echo "$ARTIFACTS" | jq -r '.id')
+          ARTIFACT_DATE=$(echo "$ARTIFACTS" | jq -r '.created_at')
+
+          echo "Artifact trouvé : ID=$ARTIFACT_ID (créé le $ARTIFACT_DATE)"
+
+          # Télécharge l'artifact dans data/
+          gh api "repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip" \
+            > /tmp/agent-db.zip
+
+          unzip -o /tmp/agent-db.zip -d data/
+          echo "DB restaurée avec succès ✅ ($(du -sh data/agent.db | cut -f1))"
 
       - name: Run AirdropAgent
         env:
@@ -66,7 +86,6 @@ jobs:
 
         run: python -m core.agent
 
-      # Sauvegarde toujours — même si le run a partiellement planté
       - name: Save agent database
         uses: actions/upload-artifact@v4
         if: always()
@@ -74,7 +93,7 @@ jobs:
           name: agent-db
           path: data/agent.db
           retention-days: 90
-          overwrite: true    # ← Écrase l'ancien artifact (évite l'accumulation)
+          overwrite: true
 
       - name: Run summary
         if: always()
