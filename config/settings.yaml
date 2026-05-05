@@ -1,10 +1,10 @@
 # ============================================================
-#  AirdropAgent — Configuration Principale v1.3
+#  AirdropAgent — Configuration Principale v1.7
 # ============================================================
 
 agent:
   name: "AirdropAgent"
-  version: "1.3.0"
+  version: "1.7.0"
   run_interval_hours: 2
   log_level: "INFO"
   timezone: "Africa/Porto-Novo"
@@ -18,9 +18,6 @@ llm:
     model: "llama-3.3-70b-versatile"
     max_tokens: 1024
     temperature: 0.7
-    # v1.3 : augmenté à 1.5s pour éliminer définitivement les 429
-    # Plan gratuit Groq = 30 req/min → 1 req toutes les 2s max
-    # 1.5s est un bon compromis vitesse/stabilité
     request_delay_seconds: 1.5
   ollama:
     model: "mistral"
@@ -33,8 +30,8 @@ llm:
 #  Langue des outputs
 # ------------------------------------------------------------
 language:
-  tweet_language: "en"              # Toujours anglais — ne pas modifier
-  notification_language: "en"       # "fr" | "en" | "es" selon préférence
+  tweet_language: "en"
+  notification_language: "en"
 
 # ------------------------------------------------------------
 #  Notifications
@@ -58,11 +55,22 @@ notifications:
 
 # ------------------------------------------------------------
 #  Projets suivis
+#
+#  Champs Discord :
+#    discord_guild_id  : ID numérique du serveur Discord du projet
+#                        (clic droit sur le serveur → Copier l'identifiant)
+#    discord_channels  : channels à surveiller (noms exacts)
+#                        Priorité : announcements, alpha, general
+#                        Laisser vide [] pour ignorer Discord pour ce projet
 # ------------------------------------------------------------
 projects:
   - name: "DAC | Quantum Chain"
     twitter_handle: "dac_chain"
-    discord_invite: "dac_chain"
+    discord_guild_id: 0               # ← Remplacer par l'ID du serveur DAC
+    discord_channels:
+      - "announcements"
+      - "general"
+      - "alpha"
     telegram_handle: "dac_chain"
     website_url: "https://dachain.io"
     chain: "DAC-L1"
@@ -73,14 +81,17 @@ projects:
 
   - name: "TENAZ"
     twitter_handle: "minetenaz"
-    discord_invite: ""
-    telegram_handle: ""
-    website_url: "https://minetenaz.com"
-    chain: "tenaz"
+    discord_guild_id: 0               # ← Remplacer par l'ID du serveur TENAZ
+    discord_channels:
+      - "announcements"
+      - "general"
+    telegram_handle: ""               # ← Ajouter si TENAZ a un Telegram
+    website_url: ""
+    chain: ""
     contract_address: null
     tge_date: null
     priority: 8
-    tags: ["L1", "DeFi", "mining", "SocialFi", "mobile"]
+    tags: []
 
 # ------------------------------------------------------------
 #  Scraping Twitter (via instances Nitter)

@@ -1,5 +1,5 @@
 # ============================================================
-#  AirdropAgent — Dépendances Python v1.6
+#  AirdropAgent — Dépendances Python v1.7
 # ============================================================
 
 # LLM
@@ -17,6 +17,9 @@ lxml>=5.0.0
 
 # Telegram — Tracker canaux projets
 telethon>=1.36.0
+
+# Discord — Tracker channels projets (bot officiel)
+discord.py>=2.3.0
 
 # CLI & Display
 typer>=0.12.0
