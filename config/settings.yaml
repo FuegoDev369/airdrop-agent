@@ -1,10 +1,21 @@
 # ============================================================
-#  AirdropAgent — Configuration Principale v1.7
+#  AirdropAgent — Configuration Principale v1.8.1
+#
+#  ⚠️  SÉCURITÉ — Ce fichier est PUBLIC sur GitHub.
+#  Ne jamais y mettre :
+#    - Adresses wallet
+#    - Clés API / tokens / secrets
+#    - Informations personnelles sensibles
+#
+#  Toutes les informations sensibles vont dans :
+#    → GitHub Secrets (production / GitHub Actions)
+#    → Fichier .env local (développement Termux)
+#       (.env est dans .gitignore — jamais pushé)
 # ============================================================
 
 agent:
   name: "AirdropAgent"
-  version: "1.7.0"
+  version: "1.8.1"
   run_interval_hours: 2
   log_level: "INFO"
   timezone: "Africa/Porto-Novo"
@@ -54,23 +65,23 @@ notifications:
   urgency_threshold: 7
 
 # ------------------------------------------------------------
+#  TGE Radar — Seuils d'alerte
+# ------------------------------------------------------------
+tge_radar:
+  alert_threshold: 40     # Alerte TGE si score >= 40/100
+  snapshot_threshold: 60  # Alerte snapshot si score >= 60/100
+
+# ------------------------------------------------------------
 #  Projets suivis
-#
-#  Champs Discord :
-#    discord_guild_id  : ID numérique du serveur Discord du projet
-#                        (clic droit sur le serveur → Copier l'identifiant)
-#    discord_channels  : channels à surveiller (noms exacts)
-#                        Priorité : announcements, alpha, general
-#                        Laisser vide [] pour ignorer Discord pour ce projet
+#  (informations publiques uniquement)
 # ------------------------------------------------------------
 projects:
   - name: "DAC | Quantum Chain"
     twitter_handle: "dac_chain"
-    discord_guild_id: 0               # ← Remplacer par l'ID du serveur DAC
+    discord_guild_id: 0
     discord_channels:
       - "announcements"
       - "general"
-      - "alpha"
     telegram_handle: "dac_chain"
     website_url: "https://dachain.io"
     chain: "DAC-L1"
@@ -81,11 +92,11 @@ projects:
 
   - name: "TENAZ"
     twitter_handle: "minetenaz"
-    discord_guild_id: 0               # ← Remplacer par l'ID du serveur TENAZ
+    discord_guild_id: 0
     discord_channels:
       - "announcements"
       - "general"
-    telegram_handle: ""               # ← Ajouter si TENAZ a un Telegram
+    telegram_handle: ""
     website_url: ""
     chain: ""
     contract_address: null
