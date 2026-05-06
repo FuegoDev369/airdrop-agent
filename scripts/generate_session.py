@@ -1,12 +1,12 @@
 """
 generate_session.py
-Script ONE-SHOT pour générer le TELEGRAM_SESSION_STRING.
+One-time script to generate the TELEGRAM_SESSION_STRING.
 
-À lancer UNE SEULE FOIS depuis Termux (ou n'importe quel terminal).
-Le SESSION_STRING généré est ensuite ajouté dans GitHub Secrets.
-Il ne expire jamais tant que tu ne te déconnectes pas manuellement.
+Run ONCE from Termux (or any terminal).
+The generated SESSION_STRING is then added to GitHub Secrets.
+It never expires as long as you don't manually log out.
 
-Usage :
+Usage:
     pip install telethon
     python scripts/generate_session.py
 """
@@ -18,23 +18,23 @@ from telethon.sessions import StringSession
 
 async def main():
     print("=" * 55)
-    print("  AirdropAgent — Génération SESSION_STRING Telegram")
+    print("  AirdropAgent — Generate Telegram SESSION_STRING")
     print("=" * 55)
     print()
-    print("Tu as besoin de API_ID et API_HASH depuis my.telegram.org")
-    print("(voir guide README section Telegram Tracker)")
+    print("You need API_ID and API_HASH from my.telegram.org")
+    print("(see README — Step 5: Telegram API)")
     print()
 
-    api_id   = input("Entre ton API_ID   : ").strip()
-    api_hash = input("Entre ton API_HASH : ").strip()
+    api_id   = input("Enter your API_ID   : ").strip()
+    api_hash = input("Enter your API_HASH : ").strip()
 
     if not api_id.isdigit():
-        print("❌ API_ID doit être un nombre entier.")
+        print("❌ API_ID must be an integer.")
         return
 
     print()
-    print("Connexion à Telegram...")
-    print("Tu vas recevoir un code de vérification sur ton compte Telegram.")
+    print("Connecting to Telegram...")
+    print("You will receive a verification code on your Telegram account.")
     print()
 
     async with TelegramClient(StringSession(), int(api_id), api_hash) as client:
@@ -42,18 +42,18 @@ async def main():
 
     print()
     print("=" * 55)
-    print("✅  SESSION_STRING généré avec succès !")
+    print("✅  SESSION_STRING generated successfully!")
     print("=" * 55)
     print()
-    print("Copie la chaîne ci-dessous en entier (1 seule ligne) :")
+    print("Copy the string below in its entirety (single line):")
     print()
     print(session_string)
     print()
     print("=" * 55)
-    print("Étape suivante :")
+    print("Next step:")
     print("  GitHub → Settings → Secrets → Actions")
-    print("  → New secret : TELEGRAM_SESSION_STRING")
-    print("  → Colle la chaîne ci-dessus")
+    print("  → New secret: TELEGRAM_SESSION_STRING")
+    print("  → Paste the string above")
     print("=" * 55)
 
 

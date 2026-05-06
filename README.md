@@ -1,29 +1,32 @@
 # 🤖 AirdropAgent
 
 > Autonomous multi-project agent to maximize your Web3 airdrop chances.
-> Monitors Twitter, Telegram and Discord. Generates concrete actions. Notifies you on Discord and Telegram.
+> Monitors Twitter, Telegram, and Discord. Generates actionable insights. Notifies via Discord and Telegram.
 
-**By FuegoDev** — Open Source, Python, GitHub Actions.
+**By FuegoDev** — Open Source · Python · GitHub Actions
 
 ---
 
 ## Why AirdropAgent?
 
-The multi-wallet bot era is over. Web3 projects now reward **consistent, quality engagement** — relevant tweets, active Discord participation, regular community presence.
+The era of multi-wallet bots is over. Web3 projects now reward **consistent, qualitative engagement** — relevant tweets, active Discord participation, regular community presence.
 
-Tracking 3 to 5 projects simultaneously with this level of discipline is **impossible without a dedicated tool**.
+Tracking 3 to 5 projects simultaneously with this level of rigor is **impossible without a dedicated tool**.
 
-AirdropAgent solves exactly that problem:
+AirdropAgent solves exactly this problem:
 
-- 📡 **Continuous monitoring** of Twitter, Telegram and Discord for each tracked project
-- 🧠 **AI analysis** of signals (quests, snapshots, major announcements)
-- 🐦 **Generated tweets** ready to post, contextualized around each project's latest news
-- 🔔 **Smart notifications** on Discord and/or Telegram
-- 🤖 **Fully autonomous** via GitHub Actions — runs on its own, no server required
+- 📡 **Continuous monitoring** of Twitter, Telegram, and Discord for each tracked project
+- 🧠 **AI-powered signal analysis** — quests, snapshots, major announcements
+- 🐦 **Generated tweets** ready to post, contextualized on the project's latest activity
+- 🔔 **Smart notifications** delivered to Discord and/or Telegram
+- 📊 **TGE Radar** — detects pre-launch signals before the crowd reacts
+- 📅 **Snapshot Engine** — eligibility alerts with actionable checklists
+- 💼 **Wallet Scorer** — estimates your on-chain position in the airdrop distribution
+- 🤖 **Fully autonomous** via GitHub Actions — runs every 2 hours, no server required
 
 ---
 
-## Quick Architecture Overview
+## Architecture
 
 ```
 GitHub Actions (cron every 2h)
@@ -31,15 +34,20 @@ GitHub Actions (cron every 2h)
         ▼
     agent.py (orchestrator)
         │
-        ├── TwitterTracker   → tweets via Nitter (no API needed)
-        ├── TelegramTracker  → channel messages via Telethon
+        ├── TwitterTracker   → tweets via public Nitter instances (no API key)
+        ├── TelegramTracker  → project channel messages via Telethon official API
+        ├── DiscordTracker   → channel messages via HTTP REST API (optional)
         │
-        ├── LLMEngine        → Groq API (free Llama 70B)
-        │     ├── Signal classification (urgency 1-10)
-        │     ├── Authentic tweet generation
+        ├── LLMEngine        → Groq API (Llama 3.3 70B — free tier)
+        │     ├── Batch signal classification (1 call per project)
+        │     ├── Authentic EN tweet generation
+        │     ├── Wallet eligibility scoring
         │     └── Daily briefing
         │
-        ├── ContentEngine    → Action plan per project
+        ├── TGERadar         → TGE probability score (0-100) from signal patterns
+        ├── SnapshotEngine   → eligibility checklist + timing estimation
+        ├── WalletScorer     → on-chain activity analysis via public RPCs
+        ├── ContentEngine    → action plans per project
         │
         └── Notifier         → Discord Webhook + Telegram Bot
                 │
@@ -51,179 +59,227 @@ GitHub Actions (cron every 2h)
 
 ---
 
-## Installation & Deployment
+## Security Model
+
+```
+settings.yaml  (PUBLIC on GitHub)
+  → Project names, Twitter/Telegram handles, Discord channels,
+    priorities, tags, thresholds, frequencies
+  → NEVER put secrets, API keys, or wallet addresses here
+
+.env  (LOCAL on Termux — never pushed to GitHub)
+  → All API keys + WALLET_ADDRESSES
+  → Copied from .env.example
+
+GitHub Secrets  (PRIVATE — encrypted by GitHub)
+  → Same values as .env but for GitHub Actions runs
+```
+
+---
+
+## Full Installation & Deployment
 
 ### Prerequisites
 
 - GitHub account
-- Groq account (free) → https://console.groq.com
-- Telegram bot (free) → see dedicated section
-- Discord webhook (free) → see dedicated section
+- Free Groq account → https://console.groq.com
+- Telegram account
+- Discord account (optional — for Discord tracking)
 
 ---
 
-### Step 1 — Fork the repo
+### Step 1 — Fork the Repository
 
 ```
 https://github.com/FuegoDev/airdrop-agent
 ```
 
-Click **Fork** in the top right → you get your own copy of the repo.
+Click **Fork** → you get your own copy of the repo.
 
 ---
 
-### Step 2 — Configure the projects to track
+### Step 2 — Configure Your Projects
 
-Edit `config/settings.yaml` in your fork:
+Edit `config/settings.yaml`:
 
 ```yaml
 projects:
-  - name: "MONAD"
-    twitter_handle: "monad_xyz"
-    discord_invite: "monad"        # Part after discord.gg/
-    telegram_handle: "monadxyz"
-    chain: "monad-testnet"
-    priority: 9                    # 1 (low) to 10 (critical)
+  - name: "PROJECT_NAME"
+    twitter_handle: "twitter_handle"      # Without @
+    telegram_handle: "telegram_handle"    # Without @, leave "" if none
+    discord_guild_id: 1234567890123456789 # Numeric server ID (0 if not configured)
+    discord_channels:
+      - "announcements"
+      - "general"
+    website_url: "https://project.xyz"
+    chain: "ethereum"
+    tge_date: null                         # Format: "2026-12-01" or null
+    priority: 9                            # 1 (low) to 10 (critical)
     tags: ["L1", "testnet"]
-
-  - name: "YOUR_PROJECT"
-    twitter_handle: "twitter_handle"
-    telegram_handle: "telegram_handle"
-    priority: 8
 ```
 
-Enable/disable notifications according to your preferences:
+> ⚠️ **Never put wallet addresses or API keys in this file.** It is public on GitHub.
 
-```yaml
-notifications:
-  discord:
-    enabled: true          # ← false to disable Discord
-    daily_brief: true
-    action_suggestions: true
+---
 
-  telegram:
-    enabled: true          # ← false to disable Telegram
-    snapshot_alerts: true
+### Step 3 — Groq API Key (Free LLM)
+
+1. Go to https://console.groq.com → create a free account
+2. **API Keys** → **Create API Key**
+3. Copy the key (starts with `gsk_...`)
+
+> Free tier: 14,400 requests/day — more than enough.
+
+---
+
+### Step 4 — Telegram Bot (Notifications)
+
+**Create the bot to receive notifications:**
+
+1. Open Telegram → search **@BotFather**
+2. Send `/newbot` → follow the instructions
+3. Copy the **token** (format: `123456:ABCdef...`)
+
+**Get your chat_id:**
+
+1. Send any message to your bot
+2. Open: `https://api.telegram.org/bot<TOKEN>/getUpdates`
+3. Find `"chat":{"id": XXXXXXXXX}` → that's your chat_id
+
+---
+
+### Step 5 — Telegram API (Track Project Channels)
+
+To let the agent **read Telegram channels of tracked projects**:
+
+**5.1 — Create an app on my.telegram.org:**
+
+1. Go to **https://my.telegram.org**
+2. Log in with your Telegram phone number
+3. Click **API development tools**
+4. Fill in the form:
+   - **App title**: `AirdropAgent`
+   - **Short name**: `airdropagent`
+   - **Platform**: Other
+5. Click **Create application**
+6. Copy **App api_id** and **App api_hash**
+
+**5.2 — Generate SESSION_STRING (one-time only):**
+
+```bash
+pip install telethon
+python scripts/generate_session.py
 ```
 
----
+The script will:
+- Ask for your `API_ID` and `API_HASH`
+- Send a verification code to your Telegram account
+- Display the `SESSION_STRING` to copy
 
-### Step 3 — Get your Groq API key (free LLM)
-
-1. Go to https://console.groq.com
-2. Create a free account
-3. Go to **API Keys** → **Create API Key**
-4. Copy the key (starts with `gsk_...`)
-
-> The free plan offers 14,400 requests/day — more than enough.
+> The SESSION_STRING never expires unless you manually log out.
 
 ---
 
-### Step 4 — Create the Telegram bot (to receive notifications)
+### Step 6 — Wallet Scorer Setup
 
-1. Open Telegram → search for **@BotFather**
-2. Send `/newbot`
-3. Follow the instructions → you get a **token** (format `123456:ABCdef...`)
-4. To get your **chat_id**:
-   - Send a message to your bot
-   - Open: `https://api.telegram.org/bot<TOKEN>/getUpdates`
-   - Look for `"chat":{"id": XXXXXXXXX}` — that's your chat_id
+The Wallet Scorer analyzes your on-chain activity to estimate your airdrop position.
+
+**Security rule**: wallet addresses are **never stored in `settings.yaml`** (public file).
+They are only read from environment variables.
+
+**For GitHub Actions** → add to GitHub Secrets:
+```
+WALLET_ADDRESSES = 0xYourAddress1,0xYourAddress2
+```
+
+**For local Termux usage** → add to your `.env` file:
+```bash
+cp .env.example .env
+# Edit .env and fill in WALLET_ADDRESSES
+```
+
+> Addresses are always masked in logs: `0x1234...5678` — never displayed in full.
 
 ---
 
-### Step 5 — Create the Discord Webhook
+### Step 7 — GitHub Secrets Configuration
 
-1. Open your Discord server
-2. Go to **Channel Settings** → **Integrations** → **Webhooks**
-3. Click **New Webhook**
-4. Copy the **Webhook URL** (format `https://discord.com/api/webhooks/...`)
+**Settings → Secrets and variables → Actions → New repository secret**
 
-> You can create a dedicated Discord channel `#airdrop-agent` to receive notifications.
-
----
-
-### Step 6 — Configure GitHub Secrets
-
-This is the **critical step**. All your credentials are stored here — never in the code.
-
-In your GitHub repo:
-**Settings** → **Secrets and variables** → **Actions** → **New repository secret**
-
-Add these secrets one by one:
-
-| Secret name | Value | Required |
+| Secret | Description | Required |
 |---|---|---|
-| `GROQ_API_KEY` | Your Groq key `gsk_...` | ✅ Yes |
-| `DISCORD_WEBHOOK` | Discord webhook URL | If Discord enabled |
-| `TELEGRAM_BOT_TOKEN` | Bot token `123456:ABCdef...` | If Telegram enabled |
-| `TELEGRAM_CHAT_ID` | Your numeric chat_id | If Telegram enabled |
-| `TELEGRAM_API_ID` | Telegram API ID (Phase 3) | No (optional) |
-| `TELEGRAM_API_HASH` | Telegram API Hash (Phase 3) | No (optional) |
+| `GROQ_API_KEY` | Groq API key (`gsk_...`) | ✅ Yes |
+| `DISCORD_WEBHOOK` | Discord Webhook URL (notifications) | If Discord notifications |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token (notifications) | If Telegram notifications |
+| `TELEGRAM_CHAT_ID` | Your Telegram chat_id | If Telegram notifications |
+| `TELEGRAM_API_ID` | Telegram app ID (my.telegram.org) | For Telegram tracking |
+| `TELEGRAM_API_HASH` | Telegram app hash | For Telegram tracking |
+| `TELEGRAM_SESSION_STRING` | Generated by generate_session.py | For Telegram tracking |
+| `WALLET_ADDRESSES` | Comma-separated wallet addresses | For Wallet Scorer |
 
-> **Security**: GitHub Secrets are encrypted and never visible after creation. Never put them in your code or in settings.yaml.
-
----
-
-### Step 7 — Enable GitHub Actions
-
-1. In your repo → **Actions** tab
-2. If a message asks you to enable workflows → click **I understand my workflows, go ahead and enable them**
-3. The `AirdropAgent — Autonomous Run` workflow will appear in the list
-
-**Immediate test**: Click the workflow → **Run workflow** → **Run workflow** (green button)
-→ The agent launches manually for the first time.
+> **Security**: GitHub Secrets are encrypted at rest. Never put these values in code files.
 
 ---
 
-### Step 8 — Verify everything is working
+### Step 8 — Enable GitHub Actions
 
-After the first run (2–3 minutes):
+1. Go to the **Actions** tab of your repo
+2. If prompted → click **I understand my workflows, enable them**
+3. The `AirdropAgent — Autonomous Run` workflow appears in the list
 
-1. **Actions tab** → Click the run → Check the logs
-2. **Your Discord** → You should receive notifications
-3. **Your Telegram** → Same
-
-If errors appear, see the **Troubleshooting** section below.
+**Immediate test**: click **Run workflow** → **Run workflow** (green button)
 
 ---
 
-## Database Persistence (GitHub Artifacts)
+### Step 9 — Verify the First Run
 
-### How it works
+After 2-3 minutes:
 
-AirdropAgent uses a SQLite database (`data/agent.db`) to store:
-- History of collected signals
-- Generated actions
-- Past runs and their statistics
+1. **Actions tab** → running job → check logs
+2. **Telegram** → you should receive the run summary
+3. **Discord** → same if webhook is configured
+
+Expected logs on a clean first run:
+```
+TelegramTracker : ✅ enabled
+DiscordTracker  : ⏸  disabled (DISCORD_USER_TOKEN missing)
+WalletScorer    : ✅ 1 wallet(s) loaded : ['0x1234...5678']
+Run #1 started
+--- MY_PROJECT ---
+  Sources → Twitter: @handle | Telegram: @handle | Discord: N/A
+MY_PROJECT Twitter  : 15 new, 0 duplicates
+MY_PROJECT Telegram : 12 new, 0 duplicates
+Batch classified: 27 signals in 1 LLM call
+TGE Radar — MY_PROJECT : score 35/100 [medium]
+Run completed — new: 27 | duplicates: 0 | actions: 2 | notifs: 5 | status: success
+```
+
+---
+
+## DB Persistence (GitHub Artifacts)
 
 On every GitHub Actions run:
 
 ```
-Start of run
+Run starts
     │
     ▼
-Download agent.db from Artifacts  ← Restore previous state
+Search for latest agent-db artifact via GitHub API
     │
     ▼
-Run the agent (read + write DB)
+Download agent.db → restore previous state
     │
     ▼
-Upload agent.db to Artifacts      ← Save new state
+Agent runs (reads + writes DB)
     │
     ▼
-End of run
+Upload updated agent.db to Artifacts (overwrite)
+    │
+    ▼
+Run ends
 ```
 
-### Retrieving the DB locally (git pull equivalent)
-
-To access the current state of the DB from Termux or your local machine:
-
-**Method 1 — GitHub interface:**
-1. **Actions** tab → Click the latest successful run
-2. **Artifacts** section at the bottom of the page
-3. Download `agent-db.zip` → unzip → you get `agent.db`
-
-**Method 2 — GitHub CLI (gh) from Termux:**
+**Download DB locally from Termux:**
 
 ```bash
 # Install GitHub CLI
@@ -232,157 +288,225 @@ pkg install gh
 # Authenticate
 gh auth login
 
-# Download the latest artifact
+# Download latest artifact
 gh run download --name agent-db --dir data/
 ```
 
-**Method 3 — Automated script:**
-```bash
-# scripts/sync_db.sh
-#!/bin/bash
-REPO="your-username/airdrop-agent"
-RUN_ID=$(gh run list --repo $REPO --limit 1 --json databaseId -q '.[0].databaseId')
-gh run download $RUN_ID --repo $REPO --name agent-db --dir data/
-echo "DB synced from run #$RUN_ID"
-```
+**Retention**: artifacts are kept for **90 days** (configurable in `agent.yml`).
 
-### Retention period
-
-Artifacts are kept for **90 days** by default (configurable in `agent.yml`).
-After 90 days, the artifact is deleted, but the next run picks up from the last available one.
-
-### GitHub free plan limits
-
+**GitHub Free tier limits**:
 | Resource | Free limit | AirdropAgent usage |
 |---|---|---|
-| Actions minutes/month | 2,000 min | ~10 min/run × 360 runs/month = ~600 min ✅ |
+| Actions minutes/month | 2,000 min | ~10 min/run × 360 runs = ~600 min ✅ |
 | Artifact storage | 500 MB | agent.db < 10 MB ✅ |
+
+---
+
+## Adding / Modifying Projects
+
+Edit only `config/settings.yaml` — no code changes needed.
+
+```yaml
+projects:
+  - name: "NEW_PROJECT"
+    twitter_handle: "handle"
+    telegram_handle: "tg_handle"
+    discord_guild_id: 1234567890
+    discord_channels:
+      - "announcements"
+      - "alpha"
+    chain: "ethereum"
+    priority: 8
+    tags: ["DeFi", "L2"]
+```
+
+Commit + push → the next run picks up the changes automatically.
+
+**Remove a project**: delete it from the file. The agent will automatically deactivate it in DB on the next run (bidirectional sync).
+
+---
+
+## Notification Configuration
+
+In `settings.yaml`:
+
+```yaml
+notifications:
+  discord:
+    enabled: true           # false to disable
+    mention_on_urgent: true # @everyone if urgency >= 9
+
+  telegram:
+    enabled: true
+    snapshot_alerts: true   # Snapshot/TGE imminent alerts
+
+  urgency_threshold: 7      # Min score (1-10) to trigger notification
+
+language:
+  tweet_language: "en"              # Always English — do not change
+  notification_language: "fr"       # "en" | "fr" | "es"
+```
+
+---
+
+## TGE Radar
+
+The TGE Radar scans all signals from the last 48 hours and computes a 0-100 probability score for an imminent TGE or snapshot.
+
+**Detected patterns and weights:**
+
+| Pattern | Weight | Keywords |
+|---|---|---|
+| Launch date mentioned | +30 | "launch date", "goes live", "this month"... |
+| CEX listing detected | +25 | "listing", "binance", "coinbase", "bybit"... |
+| Tokenomics published | +25 | "tokenomics", "token distribution", "vesting"... |
+| Snapshot mentioned | +30 | "snapshot", "eligible", "criteria", "claim"... |
+| Smart contract audit | +20 | "audit", "certik", "hacken", "audited"... |
+| Urgency signals | +20 | "last chance", "deadline", "ends soon"... |
+
+**Alert levels:**
+- Score ≥ 70 → 🔴 **CRITICAL** — immediate action required
+- Score ≥ 50 → 🟠 **HIGH** — prioritize engagement
+- Score ≥ 30 → 🟡 **MEDIUM** — stay alert
+- Score < 30 → 🟢 **LOW** — normal monitoring
+
+---
+
+## Wallet Scorer
+
+Analyzes your wallet's on-chain activity via free public RPCs:
+
+**Supported chains**: Ethereum, Arbitrum, Optimism, Base, Polygon, BNB Chain, Avalanche
+
+**Scoring factors**: transaction count, native balance, and LLM-based contextual analysis.
+
+**Scoring runs**: automatically every morning between 6:00–9:00 UTC with the daily briefing.
+
+**Setup** (never in settings.yaml):
+```bash
+# GitHub Secrets (production)
+WALLET_ADDRESSES=0xAddress1,0xAddress2
+
+# .env (local Termux development)
+WALLET_ADDRESSES=0xAddress1,0xAddress2
+```
+
+---
+
+## Run Frequency
+
+Modify the cron in `.github/workflows/agent.yml`:
+
+```yaml
+schedule:
+  - cron: '0 */2 * * *'      # Every 2 hours (default)
+  - cron: '0 */4 * * *'      # Every 4 hours (conservative)
+  - cron: '0 8,14,20 * * *'  # 3x/day: 8am, 2pm, 8pm UTC
+```
 
 ---
 
 ## Local Usage (Termux)
 
-To test or run manually from Termux:
-
 ```bash
-# Clone your fork
 git clone https://github.com/YOUR_USERNAME/airdrop-agent.git
 cd airdrop-agent
 
-# Install dependencies
 pip install -r requirements.txt
 
-# Set environment variables locally
-export GROQ_API_KEY="gsk_..."
-export DISCORD_WEBHOOK="https://discord.com/api/webhooks/..."
-export TELEGRAM_BOT_TOKEN="123456:ABCdef..."
-export TELEGRAM_CHAT_ID="123456789"
+# Copy and fill the environment file
+cp .env.example .env
+# Edit .env with your values
+
+# Load environment variables
+source .env
 
 # Run the agent
 python -m core.agent
 ```
 
-**For local usage with Ollama** (no internet connection required for the LLM):
+**Using Ollama locally (no internet required for LLM):**
 
 ```bash
 # Install Ollama
 curl -fsSL https://ollama.ai/install.sh | sh
 
-# Download the Mistral model
+# Pull the model
 ollama pull mistral
 
-# Edit settings.yaml
+# Switch in settings.yaml
 # llm:
 #   mode: "ollama"
 ```
 
 ---
 
-## Adding / Editing Projects
-
-**No code changes needed** — edit only `config/settings.yaml`:
-
-```yaml
-projects:
-  - name: "NEW_PROJECT"
-    twitter_handle: "handle"
-    telegram_handle: "handle_tg"
-    discord_invite: "xxx"     # What follows discord.gg/
-    chain: "ethereum"
-    priority: 7
-    tags: ["DeFi", "L2"]
-```
-
-Commit and push → the next GitHub Actions run picks up the change automatically.
-
----
-
-## Run Frequency
-
-Modify the cron schedule in `.github/workflows/agent.yml`:
-
-```yaml
-schedule:
-  - cron: '0 */2 * * *'    # Every 2 hours (default)
-  - cron: '0 */4 * * *'    # Every 4 hours (lighter)
-  - cron: '0 * * * *'      # Every hour (intensive)
-  - cron: '0 8,14,20 * * *' # 3 times a day (8am, 2pm, 8pm UTC)
-```
-
----
-
 ## Troubleshooting
 
-### The agent runs but I receive nothing on Discord/Telegram
+### No notifications received
 
-1. Verify that GitHub Secrets are properly configured (Settings → Secrets)
-2. In `settings.yaml`, confirm `enabled: true` for the desired channel
-3. Check that `urgency_threshold` isn't set too high (try `5` for testing)
+1. Verify GitHub Secrets are correctly set (Settings → Secrets)
+2. Check `enabled: true` for the desired channel in `settings.yaml`
+3. Lower `urgency_threshold` to `5` to test
+4. Verify your projects have `twitter_handle` and/or `telegram_handle` filled in
 
-### Error "GROQ_API_KEY missing"
+### Telegram: "Session not authorized"
 
-The `GROQ_API_KEY` secret is not configured in GitHub Secrets.
-See Step 6 of the installation guide.
+The `TELEGRAM_SESSION_STRING` has expired or is invalid. Regenerate it:
+```bash
+python scripts/generate_session.py
+```
 
-### Tweets are not being retrieved (Nitter instances)
+### Nitter instances down (Twitter)
 
-Public Nitter instances can be unstable. Solutions:
-1. Check the instances listed in `settings.yaml` → `twitter.nitter_instances`
-2. Find active instances at: https://status.d420.de
-3. Replace offline instances in your config
+Find active instances at: https://status.d420.de
+Update `twitter.nitter_instances` in `settings.yaml`.
 
-### The DB does not persist between runs
+### 429 Too Many Requests (Groq)
 
-Check that the `Save agent database` step in the workflow executed (even on failure, `if: always()` is configured). If the first run fails before writing the DB, the artifact won't exist — this is expected. The second run will create a fresh DB.
+Increase `request_delay_seconds` in `settings.yaml`:
+```yaml
+llm:
+  groq:
+    request_delay_seconds: 2.0
+```
 
-### Git push permission error
+### Artifact not found on first run
 
-Verify that `permissions: contents: write` is present in `agent.yml`.
+Normal behavior — the artifact doesn't exist yet on the very first run. The DB will be created fresh and uploaded at the end. From run #2 onward, the DB is restored correctly.
+
+### Project still tracked after removal from settings.yaml
+
+The agent performs bidirectional sync on every run. If a project disappears from `settings.yaml`, it is automatically deactivated in DB on the next run. You will see in the logs:
+```
+Sync projects: 2 active | deactivated: ['OLD_PROJECT']
+```
 
 ---
 
 ## Roadmap
 
-- [x] **Phase 1** — Twitter tracker + LLM + Discord/Telegram notifications
-- [x] **Phase 1** — GitHub Actions + Artifact persistence
-- [ ] **Phase 2** — Full Telegram tracker (Telethon)
-- [ ] **Phase 3** — Discord bot (channel reading)
-- [ ] **Phase 3** — On-chain tracker (public RPCs)
-- [ ] **Phase 4** — TGE Radar + Snapshot Engine
-- [ ] **Phase 4** — Wallet scoring simulator
-- [ ] **Phase 5** — Lightweight web interface (FastAPI)
+- [x] Phase 1 — Twitter + LLM + Notifications + DB Persistence + GitHub Actions
+- [x] Phase 2 — Signal Deduplication + Batch LLM + Telegram Tracker
+- [x] Phase 3 — Discord Tracker (HTTP API)
+- [x] Phase 4 — TGE Radar + Snapshot Engine + Wallet Scorer
+- [ ] Phase 5 — Lightweight web UI (non-technical users)
+- [ ] Phase 6 — On-chain transaction tracker (bridge activity, protocol interactions)
+- [ ] Phase 7 — Multi-wallet portfolio view
 
 ---
 
 ## Contributing
 
-PRs are welcome. This is a personal project first and foremost — test it, fork it, adapt it.
+PRs are welcome. This is a personal project first — test it, fork it, adapt it.
+
+If you find a bug or have a feature idea, open an issue on GitHub.
 
 ---
 
 ## License
 
-MIT — Free to use, modify and distribute.
+MIT — Free to use, modify, and distribute.
 
 ---
 

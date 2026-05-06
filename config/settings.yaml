@@ -1,35 +1,37 @@
 # ============================================================
-#  AirdropAgent — Configuration Principale v1.8.1
+#  AirdropAgent — Main Configuration v1.9
 #
-#  ⚠️  SÉCURITÉ — Ce fichier est PUBLIC sur GitHub.
-#  Ne jamais y mettre :
-#    - Adresses wallet
-#    - Clés API / tokens / secrets
-#    - Informations personnelles sensibles
+#  ⚠️  SECURITY — This file is PUBLIC on GitHub.
+#  Never put here:
+#    - Wallet addresses
+#    - API keys / tokens / secrets
+#    - Any sensitive personal information
 #
-#  Toutes les informations sensibles vont dans :
-#    → GitHub Secrets (production / GitHub Actions)
-#    → Fichier .env local (développement Termux)
-#       (.env est dans .gitignore — jamais pushé)
+#  All sensitive information goes into:
+#    → GitHub Secrets  (production / GitHub Actions)
+#    → Local .env file (development / Termux)
+#       (.env is in .gitignore — never pushed to GitHub)
 # ============================================================
 
 agent:
   name: "AirdropAgent"
-  version: "1.8.1"
-  run_interval_hours: 2
-  log_level: "INFO"
+  version: "1.9.0"
+  run_interval_hours: 2         # Must match cron in agent.yml
+  log_level: "INFO"             # DEBUG | INFO | WARNING | ERROR
   timezone: "Africa/Porto-Novo"
 
 # ------------------------------------------------------------
 #  LLM Backend
+#  mode: "groq"   → Groq API (recommended for GitHub Actions)
+#        "ollama" → Local Ollama (recommended for Termux)
 # ------------------------------------------------------------
 llm:
   mode: "groq"
   groq:
-    model: "llama-3.3-70b-versatile"
+    model: "llama-3.3-70b-versatile"    # Current active Groq model
     max_tokens: 1024
     temperature: 0.7
-    request_delay_seconds: 1.5
+    request_delay_seconds: 1.5          # Delay between LLM calls (prevents 429)
   ollama:
     model: "mistral"
     base_url: "http://localhost:11434"
@@ -38,11 +40,19 @@ llm:
     request_delay_seconds: 0
 
 # ------------------------------------------------------------
-#  Langue des outputs
+#  Output Language
+#
+#  tweet_language        : Language for generated tweets
+#                          ALWAYS "en" — English is the standard
+#                          language of crypto on Twitter/X
+#
+#  notification_language : Language for alerts, briefings,
+#                          and Discord action suggestions
+#                          Default: "en" | Options: "fr" | "es"
 # ------------------------------------------------------------
 language:
-  tweet_language: "en"
-  notification_language: "en"
+  tweet_language: "en"              # Do not change — always English
+  notification_language: "en"       # Change to "en" for English notifications
 
 # ------------------------------------------------------------
 #  Notifications
@@ -50,30 +60,46 @@ language:
 notifications:
   discord:
     enabled: true
-    mention_on_urgent: true
-    daily_brief: true
-    action_suggestions: true
-    quest_alerts: true
+    mention_on_urgent: true           # @everyone if urgency >= 9
+    daily_brief: true                 # Morning briefing (6-9am UTC)
+    action_suggestions: true          # Generated tweet suggestions
+    quest_alerts: true                # Quest and snapshot alerts
 
   telegram:
     enabled: true
     daily_brief: true
     action_suggestions: true
     quest_alerts: true
-    snapshot_alerts: true
+    snapshot_alerts: true             # TGE/snapshot imminent alerts
 
-  urgency_threshold: 7
+  urgency_threshold: 7               # Min score (1-10) to trigger notification
 
 # ------------------------------------------------------------
-#  TGE Radar — Seuils d'alerte
+#  TGE Radar — Alert thresholds (score 0-100)
 # ------------------------------------------------------------
 tge_radar:
-  alert_threshold: 40     # Alerte TGE si score >= 40/100
-  snapshot_threshold: 60  # Alerte snapshot si score >= 60/100
+  alert_threshold: 40                # Alert if TGE score >= 40
+  snapshot_threshold: 60             # Snapshot alert if score >= 60
 
 # ------------------------------------------------------------
-#  Projets suivis
-#  (informations publiques uniquement)
+#  Tracked Projects
+#
+#  Fields:
+#    name              : Display name (unique identifier in DB)
+#    twitter_handle    : Twitter/X handle without @
+#    telegram_handle   : Telegram channel handle without @
+#                        Leave "" if the project has no Telegram
+#    discord_guild_id  : Numeric Discord server ID
+#                        (right-click server → Copy Server ID)
+#                        Set to 0 if not configured
+#    discord_channels  : List of channel names to monitor
+#    website_url       : Official project website (informational)
+#    chain             : Blockchain name (for wallet scoring RPC)
+#    tge_date          : Known TGE date in "YYYY-MM-DD" format
+#                        Set to null if unknown
+#    priority          : 1 (low) to 10 (critical)
+#    tags              : Used to select the right airdrop criteria template
+#                        Options: "L1", "L2", "testnet", "DeFi", "bridge"
 # ------------------------------------------------------------
 projects:
   - name: "DAC | Quantum Chain"
@@ -105,7 +131,8 @@ projects:
     tags: []
 
 # ------------------------------------------------------------
-#  Scraping Twitter (via instances Nitter)
+#  Twitter Scraping (via public Nitter instances)
+#  Find active instances at: https://status.d420.de
 # ------------------------------------------------------------
 twitter:
   tweets_per_project: 15
@@ -114,10 +141,10 @@ twitter:
     - "https://nitter.privacydev.net"
     - "https://nitter.poast.org"
     - "https://nitter.1d4.us"
-  request_delay_seconds: 2
+  request_delay_seconds: 2           # Delay between requests (human-like behavior)
 
 # ------------------------------------------------------------
-#  Scoring & Analyse
+#  Scoring & Analysis
 # ------------------------------------------------------------
 scoring:
   urgency_weights:
@@ -129,4 +156,4 @@ scoring:
     regular_update: 3
 
   content_generation:
-    tweets_per_project_per_day: 1
+    tweets_per_project_per_day: 1    # 1 English tweet per project per run

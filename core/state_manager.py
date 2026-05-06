@@ -1,13 +1,11 @@
 """
-state_manager.py — v1.5.3
-Gestionnaire d'état persistant via SQLite.
+state_manager.py — v1.9
+Persistent state manager via SQLite.
+Single source of truth for all agent data.
 
-CHANGELOG v1.5.3 :
-  - FIX : purge des signaux avec content_hash='' AVANT CREATE UNIQUE INDEX
-    Les anciens signaux (v1.4 et avant) ont tous content_hash='' ce qui
-    cause une violation UNIQUE constraint à la création de l'index.
-    Solution : on les supprime proprement — ils sont de toute façon
-    inutilisables pour la déduplication (hash manquant).
+CHANGELOG v1.9:
+  - Full translation to English (comments, logs, docstrings)
+  - No functional changes from v1.5.3
 """
 
 import sqlite3
@@ -20,7 +18,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).parent.parent
-DB_PATH = ROOT_DIR / "data" / "agent.db"
+DB_PATH  = ROOT_DIR / "data" / "agent.db"
 
 
 def get_connection() -> sqlite3.Connection:
@@ -33,15 +31,15 @@ def get_connection() -> sqlite3.Connection:
 
 def initialize_db():
     """
-    Initialisation DB en 4 étapes garanties dans l'ordre :
-      1. CREATE TABLE   — structure de base
-      2. _migrate_db()  — ajout colonnes manquantes
-      3. _purge_legacy_signals() — supprime anciens signaux sans hash
-      4. CREATE INDEX   — après migration ET purge
+    Initialize all tables and indexes in guaranteed order:
+      1. CREATE TABLE  — base structure
+      2. _migrate_db() — add missing columns on existing DB
+      3. _purge_legacy_signals() — remove old signals without hash
+      4. CREATE INDEX  — after migration and purge
     """
     with get_connection() as conn:
 
-        # ── ÉTAPE 1 : Tables ──────────────────────────────────
+        # Step 1: Tables only — no indexes yet
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS projects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,15 +109,13 @@ def initialize_db():
             );
         """)
 
-        # ── ÉTAPE 2 : Migration colonnes manquantes ───────────
+        # Step 2: Add missing columns on existing DB
         _migrate_db(conn)
 
-        # ── ÉTAPE 3 : Purge signaux legacy sans hash ──────────
-        # Les signaux v1.4 ont content_hash='' → doublons sur l'index unique
-        # On les supprime avant de créer l'index.
+        # Step 3: Remove legacy signals without hash (from v1.4 and earlier)
         _purge_legacy_signals(conn)
 
-        # ── ÉTAPE 4 : Index — après migration ET purge ────────
+        # Step 4: Indexes — created AFTER migration and purge
         conn.executescript("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_hash
                 ON signals(project_id, content_hash);
@@ -131,50 +127,50 @@ def initialize_db():
                 ON signals(notified, urgency_score);
         """)
 
-    logger.info(f"Base de données initialisée : {DB_PATH}")
+    logger.info(f"Database initialized: {DB_PATH}")
 
 
 def _migrate_db(conn: sqlite3.Connection):
-    """Ajoute les colonnes manquantes sur DB existante. Safe à rejouer."""
+    """Add missing columns to existing DB. Safe to run multiple times."""
     migrations = [
-        ("signals",    "content_hash",     "TEXT NOT NULL DEFAULT ''"),
-        ("signals",    "notified",          "BOOLEAN DEFAULT 0"),
-        ("agent_runs", "signals_new",       "INTEGER DEFAULT 0"),
-        ("agent_runs", "signals_duplicate", "INTEGER DEFAULT 0"),
-        ("projects",   "website_url",       "TEXT"),
+        ("signals",    "content_hash",      "TEXT NOT NULL DEFAULT ''"),
+        ("signals",    "notified",           "BOOLEAN DEFAULT 0"),
+        ("agent_runs", "signals_new",        "INTEGER DEFAULT 0"),
+        ("agent_runs", "signals_duplicate",  "INTEGER DEFAULT 0"),
+        ("projects",   "website_url",        "TEXT"),
     ]
     for table, column, col_def in migrations:
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
-            logger.info(f"Migration DB : {table}.{column} ajoutée ✅")
+            logger.info(f"DB migration: {table}.{column} added ✅")
         except sqlite3.OperationalError:
-            pass  # Colonne déjà existante
+            pass  # Column already exists — expected
 
 
 def _purge_legacy_signals(conn: sqlite3.Connection):
     """
-    Supprime les signaux dont content_hash='' (anciens signaux v1.4).
-    Nécessaire pour permettre la création de l'index UNIQUE.
-    Ces signaux sont inutilisables pour la déduplication de toute façon.
+    Remove signals with content_hash='' (legacy signals from v1.4 and earlier).
+    Required to allow creation of the UNIQUE index on content_hash.
+    These signals cannot be used for deduplication anyway.
     """
-    result = conn.execute(
-        "DELETE FROM signals WHERE content_hash = ''"
-    )
+    result = conn.execute("DELETE FROM signals WHERE content_hash = ''")
     if result.rowcount > 0:
         logger.info(
-            f"Purge legacy : {result.rowcount} ancien(s) signal(s) sans hash supprimé(s) "
-            f"(migration v1.4→v1.5)"
+            f"Legacy purge: {result.rowcount} old signal(s) without hash removed "
+            f"(v1.4 → v1.5 migration)"
         )
 
 
-# ── Hash de déduplication ────────────────────────────────────
+# ── Deduplication hash ───────────────────────────────────────
 
 def compute_signal_hash(project_id: int, source: str, raw_content: str) -> str:
+    """Compute a unique hash for a signal based on project, source, and content."""
     key = f"{project_id}|{source}|{raw_content[:500]}"
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
 
 
 def signal_already_seen(project_id: int, content_hash: str) -> bool:
+    """Return True if this signal has already been inserted into DB."""
     with get_connection() as conn:
         row = conn.execute(
             "SELECT id FROM signals WHERE project_id = ? AND content_hash = ?",
@@ -183,9 +179,10 @@ def signal_already_seen(project_id: int, content_hash: str) -> bool:
         return row is not None
 
 
-# ── Projets ──────────────────────────────────────────────────
+# ── Projects ─────────────────────────────────────────────────
 
 def upsert_project(project: dict) -> int:
+    """Insert or update a project. Returns its database id."""
     with get_connection() as conn:
         existing = conn.execute(
             "SELECT id FROM projects WHERE name = ?", (project["name"],)
@@ -233,8 +230,13 @@ def upsert_project(project: dict) -> int:
 
 
 def deactivate_removed_projects(active_names: list) -> list:
+    """
+    Deactivate all projects in DB that are no longer in active_names.
+    Safety: does nothing if active_names is empty (prevents accidental mass deactivation).
+    Returns list of deactivated project names.
+    """
     if not active_names:
-        logger.warning("deactivate_removed_projects : liste vide — aucune désactivation")
+        logger.warning("deactivate_removed_projects: empty list received — skipping")
         return []
 
     with get_connection() as conn:
@@ -252,7 +254,7 @@ def deactivate_removed_projects(active_names: list) -> list:
                 WHERE name NOT IN ({placeholders})
             """, active_names)
             for name in removed:
-                logger.info(f"Projet désactivé (retiré du settings.yaml) : {name}")
+                logger.info(f"Project deactivated (removed from settings.yaml): {name}")
 
     return removed
 
@@ -265,9 +267,10 @@ def get_active_projects() -> list:
         return [dict(r) for r in rows]
 
 
-# ── Signaux ──────────────────────────────────────────────────
+# ── Signals ──────────────────────────────────────────────────
 
 def insert_signal(signal: dict) -> Optional[int]:
+    """Insert a signal. Returns the new id, or None if duplicate."""
     with get_connection() as conn:
         try:
             cursor = conn.execute("""
@@ -286,10 +289,11 @@ def insert_signal(signal: dict) -> Optional[int]:
             ))
             return cursor.lastrowid
         except sqlite3.IntegrityError:
-            return None
+            return None  # Duplicate — silently ignored
 
 
 def get_unnotified_urgent_signals(project_id: int, min_urgency: int = 7) -> list:
+    """Return urgent signals not yet notified for a project."""
     with get_connection() as conn:
         rows = conn.execute("""
             SELECT * FROM signals
@@ -301,6 +305,7 @@ def get_unnotified_urgent_signals(project_id: int, min_urgency: int = 7) -> list
 
 
 def mark_signals_notified(signal_ids: list):
+    """Mark a list of signals as already notified."""
     if not signal_ids:
         return
     placeholders = ",".join("?" * len(signal_ids))
@@ -322,9 +327,10 @@ def get_recent_signals(project_id: int, hours: int = 24) -> list:
         return [dict(r) for r in rows]
 
 
-# ── Nettoyage ─────────────────────────────────────────────────
+# ── Cleanup ───────────────────────────────────────────────────
 
 def cleanup_old_signals(days: int = 7):
+    """Delete notified signals older than N days to keep the DB lean."""
     with get_connection() as conn:
         result = conn.execute("""
             DELETE FROM signals
@@ -332,7 +338,7 @@ def cleanup_old_signals(days: int = 7):
               AND collected_at < datetime('now', ? || ' days')
         """, (f"-{days}",))
         if result.rowcount > 0:
-            logger.info(f"Nettoyage DB : {result.rowcount} signaux anciens supprimés")
+            logger.info(f"DB cleanup: {result.rowcount} old signal(s) deleted")
 
 
 # ── Actions ──────────────────────────────────────────────────

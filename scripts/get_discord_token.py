@@ -1,0 +1,86 @@
+"""
+get_discord_token.py
+Interactive guide to obtain your Discord User Token.
+
+The Discord User Token allows reading servers you are a member of
+without inviting a bot — exactly what we need to track Web3 project servers.
+
+Usage:
+    python scripts/get_discord_token.py
+"""
+
+
+def main():
+    print("=" * 55)
+    print("  AirdropAgent — Get Discord User Token")
+    print("=" * 55)
+    print()
+    print("The Discord User Token allows AirdropAgent to read")
+    print("servers you are a member of — without inviting a bot.")
+    print()
+    print("─" * 55)
+    print("METHOD — Via web browser (Chrome / Firefox):")
+    print("─" * 55)
+    print()
+    print("1. Open Discord in your browser")
+    print("   → https://discord.com/app")
+    print()
+    print("2. Log in to your Discord account")
+    print()
+    print("3. Open Developer Tools:")
+    print("   → Press F12 (PC / Linux)")
+    print("   → Or right-click → Inspect")
+    print()
+    print("4. Go to the 'Console' tab")
+    print()
+    print("5. Paste this command and press Enter:")
+    print()
+    print("   " + "─" * 49)
+    print("   (webpackChunkdiscord_app.push([[''],{},e=>{")
+    print("   m=[];for(let c in e.c)m.push(e.c[c])}]),")
+    print("   m).find(m=>m?.exports?.default?.getToken!==void 0)")
+    print("   .exports.default.getToken()")
+    print("   " + "─" * 49)
+    print()
+    print("6. The token appears between quotes.")
+    print("   Copy it entirely.")
+    print()
+    print("─" * 55)
+    print("SECURITY — Important notes:")
+    print("─" * 55)
+    print()
+    print("⚠️  NEVER share this token with anyone")
+    print("⚠️  NEVER put it in the source code or settings.yaml")
+    print("✅  Add it ONLY to GitHub Secrets")
+    print("   under the name: DISCORD_USER_TOKEN")
+    print()
+    print("Once you have the token, add it in:")
+    print("GitHub → Settings → Secrets → Actions → New secret")
+    print("  Name : DISCORD_USER_TOKEN")
+    print("  Value: <your token>")
+    print()
+    print("=" * 55)
+    print()
+    print("─" * 55)
+    print("NEXT STEP — Find Discord Server Guild IDs:")
+    print("─" * 55)
+    print()
+    print("For each project Discord server you want to track:")
+    print()
+    print("1. Join the project's Discord server")
+    print("   (with your personal account)")
+    print()
+    print("2. Enable Developer Mode in Discord:")
+    print("   Settings → Advanced → Developer Mode → Enable")
+    print()
+    print("3. Right-click on the server icon")
+    print("   → 'Copy Server ID'")
+    print()
+    print("4. Paste this ID in config/settings.yaml:")
+    print("   discord_guild_id: 1234567890123456789")
+    print()
+    print("=" * 55)
+
+
+if __name__ == "__main__":
+    main()

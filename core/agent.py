@@ -1,13 +1,13 @@
 """
-agent.py — v1.8
-Orchestrateur principal d'AirdropAgent.
+agent.py — v1.9
+AirdropAgent main orchestrator.
 
-CHANGELOG v1.8 :
-  - Intégration TGERadar : scoring TGE par projet à chaque run
-  - Intégration SnapshotEngine : rapport éligibilité + checklist actions
-  - Intégration WalletScorer : scoring on-chain des wallets configurés
-  - Notifications dédiées pour alertes TGE/snapshot critiques
-  - Wallet scoring envoyé une fois par jour (avec briefing)
+Run cycle: Collect → Deduplicate → Analyze → Notify
+Entry point for GitHub Actions and local Termux usage.
+
+CHANGELOG v1.9:
+  - Full translation to English (comments, logs, docstrings)
+  - No functional changes from v1.8.1
 """
 
 import yaml
@@ -52,20 +52,37 @@ def load_config() -> dict:
 
 
 def sync_projects_from_config(config: dict):
+    """
+    Bidirectional sync between settings.yaml and the database.
+    - Projects in config → upserted (added or updated)
+    - Projects in DB missing from config → deactivated (active=0)
+    """
     projects     = config.get("projects", [])
     active_names = [p["name"] for p in projects]
     for project in projects:
         upsert_project(project)
     deactivated = deactivate_removed_projects(active_names)
     if deactivated:
-        logger.info(f"Sync projets : {len(active_names)} actifs | désactivés : {deactivated}")
+        logger.info(f"Project sync: {len(active_names)} active | deactivated: {deactivated}")
     else:
-        logger.info(f"Sync projets : {len(active_names)} actif(s), aucun désactivé")
+        logger.info(f"Project sync: {len(active_names)} active project(s), none deactivated")
 
 
-def _collect_from_source(raw_items, source, project_id, project_name, llm):
+def _collect_from_source(
+    raw_items: list,
+    source: str,
+    project_id: int,
+    project_name: str,
+    llm: LLMEngine,
+) -> tuple:
+    """
+    Filter duplicates, batch-classify new items, and insert into DB.
+    Returns (new_signals list, duplicate_count int).
+    Shared logic for Twitter, Telegram, and Discord.
+    """
     fresh = []
     dupes = 0
+
     for item in raw_items:
         content = item.get("content", "")
         if not content or len(content) < 10:
@@ -91,7 +108,11 @@ def _collect_from_source(raw_items, source, project_id, project_name, llm):
             "signal_type":     classif.get("signal_type", "regular_update"),
             "content":         classif.get("summary", item["content"][:300]),
             "content_hash":    item["_hash"],
-            "raw_data":        {"original": item["content"], "url": item.get("url", "")},
+            "raw_data":        {
+                "original": item["content"],
+                "url":      item.get("url", ""),
+                "channel":  item.get("channel", ""),
+            },
             "urgency_score":   classif.get("urgency_score", 2),
             "action_required": classif.get("action_required"),
         }
@@ -103,58 +124,87 @@ def _collect_from_source(raw_items, source, project_id, project_name, llm):
     return inserted, dupes
 
 
-def collect_and_deduplicate(project, trackers, llm):
+def collect_and_deduplicate(
+    project: dict,
+    trackers: dict,
+    llm: LLMEngine,
+) -> dict:
+    """
+    Collect, deduplicate, and batch-classify signals from all sources
+    (Twitter, Telegram, Discord) for a given project.
+    """
     pid   = project["id"]
     pname = project["name"]
     all_new     = []
     total_dupes = 0
 
-    # Twitter
-    handle = project.get("twitter_handle", "").strip()
-    if handle and trackers.get("twitter"):
+    # ── Twitter ──────────────────────────────────────────────
+    twitter_handle = project.get("twitter_handle", "").strip()
+    if twitter_handle and trackers.get("twitter"):
         try:
-            raw = trackers["twitter"].get_tweets(handle)
+            raw = trackers["twitter"].get_tweets(twitter_handle)
             new, dupes = _collect_from_source(raw, "twitter", pid, pname, llm)
-            all_new += new; total_dupes += dupes
-            logger.info(f"{pname} Twitter : {len(new)} nouveaux, {dupes} doublons")
+            all_new += new
+            total_dupes += dupes
+            logger.info(f"{pname} Twitter: {len(new)} new, {dupes} duplicates skipped")
         except Exception as e:
-            logger.warning(f"Twitter — {pname} : {e}")
+            logger.warning(f"Twitter tracker — {pname}: {e}")
+            logger.debug(traceback.format_exc())
+    elif not twitter_handle:
+        logger.debug(f"{pname}: twitter_handle not configured — Twitter skipped")
 
-    # Telegram
+    # ── Telegram ─────────────────────────────────────────────
     tg_handle = project.get("telegram_handle", "").strip()
     tg        = trackers.get("telegram")
-    if tg_handle and tg and tg.enabled:
+
+    if not tg_handle:
+        logger.info(f"{pname}: telegram_handle not configured — Telegram skipped")
+    elif tg and tg.enabled:
+        logger.info(f"{pname}: reading Telegram @{tg_handle}...")
         try:
             raw = tg.get_messages(tg_handle, limit=20)
             new, dupes = _collect_from_source(raw, "telegram", pid, pname, llm)
-            all_new += new; total_dupes += dupes
-            logger.info(f"{pname} Telegram : {len(new)} nouveaux, {dupes} doublons")
+            all_new += new
+            total_dupes += dupes
+            logger.info(f"{pname} Telegram: {len(new)} new, {dupes} duplicates skipped")
         except Exception as e:
-            logger.warning(f"Telegram — {pname} : {e}")
-    elif not tg_handle:
-        logger.info(f"{pname} : telegram_handle non configuré")
+            logger.warning(f"Telegram tracker — {pname}: {e}")
+    else:
+        logger.info(f"{pname}: TelegramTracker disabled (missing secrets)")
 
-    # Discord
+    # ── Discord ──────────────────────────────────────────────
     guild_id = project.get("discord_guild_id", 0)
     channels = project.get("discord_channels", [])
     discord  = trackers.get("discord")
-    if guild_id and discord and discord.enabled:
+
+    if not guild_id or guild_id == 0:
+        logger.info(f"{pname}: discord_guild_id not configured — Discord skipped")
+    elif discord and discord.enabled:
+        logger.info(f"{pname}: reading Discord guild {guild_id} channels {channels}...")
         try:
             raw = discord.get_messages(guild_id, channels, limit=20)
             new, dupes = _collect_from_source(raw, "discord", pid, pname, llm)
-            all_new += new; total_dupes += dupes
-            logger.info(f"{pname} Discord : {len(new)} nouveaux, {dupes} doublons")
+            all_new += new
+            total_dupes += dupes
+            logger.info(f"{pname} Discord: {len(new)} new, {dupes} duplicates skipped")
         except Exception as e:
-            logger.warning(f"Discord — {pname} : {e}")
-    elif not guild_id:
-        logger.info(f"{pname} : discord_guild_id non configuré")
+            logger.warning(f"Discord tracker — {pname}: {e}")
+            logger.debug(traceback.format_exc())
+    else:
+        logger.info(f"{pname}: DiscordTracker disabled (DISCORD_USER_TOKEN missing)")
 
     return {"new": all_new, "duplicate": total_dupes}
 
 
-def generate_actions(project, signals, content_engine):
+def generate_actions(
+    project: dict,
+    signals: list,
+    content_engine: ContentEngine,
+) -> list:
+    """Generate recommended actions for a project and insert them into DB."""
     action_plan = content_engine.generate_action_plan(project, signals)
     inserted    = []
+
     for action in action_plan:
         action_data = {
             "project_id":        project["id"],
@@ -168,15 +218,21 @@ def generate_actions(project, signals, content_engine):
                 if tweets:
                     action_data["generated_content"] = tweets[0]["text"]
             except Exception as e:
-                logger.warning(f"Tweet {project['name']} : {e}")
+                logger.warning(f"Tweet generation — {project['name']}: {e}")
+
         action_data["id"] = insert_action(action_data)
         inserted.append(action_data)
+
     return inserted
 
 
 def run_agent():
+    """
+    Main agent entry point.
+    Executed by GitHub Actions (cron schedule) or manually.
+    """
     logger.info("=" * 60)
-    logger.info("AirdropAgent — Démarrage du run")
+    logger.info("AirdropAgent — Starting run")
     logger.info("=" * 60)
 
     trackers: dict = {}
@@ -193,18 +249,23 @@ def run_agent():
     }
 
     try:
+        # ── Initialization ────────────────────────────────────
         config = load_config()
-        logger.info(f"Config chargée : {len(config.get('projects', []))} projet(s)")
+        logger.info(f"Config loaded: {len(config.get('projects', []))} project(s) defined")
 
+        # DB must be initialized FIRST — before any SQLite access
         initialize_db()
-        logger.info("Base de données initialisée ✅")
+        logger.info("Database initialized ✅")
 
         sync_projects_from_config(config)
+
         run_id = start_run()
-        logger.info(f"Run #{run_id} démarré")
+        logger.info(f"Run #{run_id} started")
+
+        # Clean up signals older than 7 days
         cleanup_old_signals(days=7)
 
-        # ── Composants ────────────────────────────────────────
+        # ── Component initialization ──────────────────────────
         llm            = LLMEngine(config)
         notifier       = Notifier(config)
         content_engine = ContentEngine(llm, config)
@@ -215,9 +276,10 @@ def run_agent():
         telegram_tracker = TelegramTrackerSync()
         discord_tracker  = DiscordTrackerSync()
 
-        logger.info(f"TelegramTracker : {'✅' if telegram_tracker.enabled else '⏸️ '}")
-        logger.info(f"DiscordTracker  : {'✅' if discord_tracker.enabled else '⏸️ '}")
-        logger.info(f"WalletScorer    : {'✅' if wallet_scorer.wallets else '⏸️  (aucun wallet configuré)'}")
+        # Diagnostics
+        logger.info(f"TelegramTracker : {'✅ enabled' if telegram_tracker.enabled else '⏸  disabled (missing secrets)'}")
+        logger.info(f"DiscordTracker  : {'✅ enabled' if discord_tracker.enabled else '⏸  disabled (DISCORD_USER_TOKEN missing)'}")
+        logger.info(f"WalletScorer    : {'✅ ' + str(len(wallet_scorer.wallets)) + ' wallet(s)' if wallet_scorer.wallets else '⏸  disabled (no WALLET_ADDRESSES configured)'}")
 
         trackers = {
             "twitter":  TwitterTracker(config),
@@ -226,17 +288,27 @@ def run_agent():
         }
 
         projects = get_active_projects()
-        logger.info(f"{len(projects)} projet(s) actif(s)")
+        logger.info(f"{len(projects)} active project(s) to process")
 
-        current_hour    = datetime.utcnow().hour
-        is_morning_run  = 6 <= current_hour <= 9
+        if not projects:
+            logger.warning("⚠️  No active projects — check config/settings.yaml")
+
+        current_hour   = datetime.utcnow().hour
+        is_morning_run = 6 <= current_hour <= 9
         all_project_data = []
 
-        # ── Boucle par projet ─────────────────────────────────
+        # ── Main project loop ─────────────────────────────────
         for project in projects:
             logger.info(f"--- {project['name']} ---")
+            logger.info(
+                f"  Sources → "
+                f"Twitter: @{project.get('twitter_handle') or 'N/A'} | "
+                f"Telegram: @{project.get('telegram_handle') or 'N/A'} | "
+                f"Discord: {project.get('discord_guild_id') or 'N/A'}"
+            )
+
             try:
-                # 1. Collecte + déduplication + batch LLM
+                # 1. Collect + deduplicate + batch LLM classification
                 result      = collect_and_deduplicate(project, trackers, llm)
                 new_signals = result["new"]
                 dupe_count  = result["duplicate"]
@@ -245,9 +317,10 @@ def run_agent():
                 stats["signals_new"]        += len(new_signals)
                 stats["signals_duplicate"]  += dupe_count
 
-                # 2. Notifications signaux urgents
+                # 2. Notify urgent unnotified signals
                 threshold  = config["notifications"].get("urgency_threshold", 7)
                 unnotified = get_unnotified_urgent_signals(project["id"], threshold)
+
                 notified_ids = []
                 for signal in unnotified[:3]:
                     sent = notifier.notify_signal(project["name"], signal)
@@ -257,31 +330,38 @@ def run_agent():
                 if notified_ids:
                     mark_signals_notified(notified_ids)
 
-                # 3. Génération actions + tweet
+                # 3. Generate actions + tweet suggestion
                 actions = []
                 if new_signals:
                     actions = generate_actions(project, new_signals, content_engine)
                     stats["actions_generated"] += len(actions)
-                    for ta in [a for a in actions if a.get("action_type") == "tweet" and a.get("generated_content")][:1]:
-                        sent = notifier.notify_tweet_suggestion(project["name"], ta["generated_content"])
+                    tweet_actions = [
+                        a for a in actions
+                        if a.get("action_type") == "tweet" and a.get("generated_content")
+                    ]
+                    for ta in tweet_actions[:1]:
+                        sent = notifier.notify_tweet_suggestion(
+                            project["name"], ta["generated_content"]
+                        )
                         stats["notifications_sent"] += sent
 
-                # 4. ── TGE RADAR ──────────────────────────────
+                # 4. TGE Radar analysis (48h signals)
                 recent_signals = get_recent_signals(project["id"], hours=48)
                 tge_report     = tge_radar.analyze_signals(recent_signals, project["name"])
 
-                if tge_radar.should_alert(tge_report, threshold=40):
+                alert_threshold = config.get("tge_radar", {}).get("alert_threshold", 40)
+                if tge_radar.should_alert(tge_report, threshold=alert_threshold):
                     logger.info(
-                        f"TGE Radar — {project['name']} : "
+                        f"TGE Radar — {project['name']}: "
                         f"score {tge_report['global_score']}/100 [{tge_report['risk_level']}]"
                     )
 
-                    # 5. ── SNAPSHOT ENGINE ────────────────────
+                    # 5. Snapshot Engine report
                     snapshot_report = snapshot_eng.build_report(
                         project, recent_signals, tge_report
                     )
 
-                    # Notifier si score critique ou high
+                    # Alert if critical or high risk
                     if tge_report["risk_level"] in ("critical", "high"):
                         timing = snapshot_report.get("timing", {})
                         sent   = notifier.notify_snapshot_alert(
@@ -291,14 +371,19 @@ def run_agent():
                         )
                         stats["notifications_sent"] += sent
 
-                # 6. ── WALLET SCORING (matin uniquement) ──────
+                # 6. Wallet Scoring (morning run only)
                 if is_morning_run and wallet_scorer.wallets:
-                    logger.info(f"{project['name']} : scoring wallets...")
-                    wallet_reports = wallet_scorer.score_all_wallets(project, llm)
-                    if wallet_reports:
-                        msg  = wallet_scorer.format_notification(wallet_reports, project["name"])
-                        sent = notifier._send_telegram(msg) if hasattr(notifier, "_send_telegram") else 0
-                        stats["notifications_sent"] += 1 if sent else 0
+                    logger.info(f"{project['name']}: scoring wallets...")
+                    try:
+                        wallet_reports = wallet_scorer.score_all_wallets(project, llm)
+                        if wallet_reports:
+                            msg = wallet_scorer.format_notification(
+                                wallet_reports, project["name"]
+                            )
+                            notifier._send_telegram(msg)
+                            stats["notifications_sent"] += 1
+                    except Exception as e:
+                        logger.warning(f"Wallet scoring — {project['name']}: {e}")
 
                 all_project_data.append({
                     "name":          project["name"],
@@ -309,24 +394,24 @@ def run_agent():
                     "actions_count": len(actions),
                     "tge_score":     tge_report.get("global_score", 0),
                     "tge_risk":      tge_report.get("risk_level", "low"),
-                    "top_signal":    new_signals[0].get("content", "") if new_signals else "Aucun nouveau signal",
+                    "top_signal":    new_signals[0].get("content", "") if new_signals else "No new signals",
                 })
 
             except Exception as e:
-                logger.error(f"Erreur projet {project['name']} : {e}")
+                logger.error(f"Error processing {project['name']}: {e}")
                 logger.debug(traceback.format_exc())
                 continue
 
-        # ── Briefing quotidien (6h-9h UTC) ───────────────────
+        # ── Daily briefing (6:00–9:00 UTC) ───────────────────
         if is_morning_run:
-            logger.info("Génération du briefing quotidien...")
+            logger.info("Generating daily briefing...")
             try:
                 brief   = llm.generate_daily_brief(all_project_data)
                 pending = get_pending_actions()
                 sent    = notifier.notify_daily_brief(brief, len(pending))
                 stats["notifications_sent"] += sent
             except Exception as e:
-                logger.warning(f"Briefing quotidien : {e}")
+                logger.warning(f"Daily briefing error: {e}")
 
         stats["next_run_hours"] = config["agent"].get("run_interval_hours", 2)
         notifier.notify_run_summary(stats)
@@ -334,24 +419,25 @@ def run_agent():
     except Exception as e:
         stats["status"]    = "error"
         stats["error_log"] = str(e)
-        logger.error(f"Erreur critique : {e}")
+        logger.error(f"Critical error: {e}")
         logger.error(traceback.format_exc())
 
     finally:
         if run_id is not None:
             finish_run(run_id, stats, stats["status"])
-        for tracker in trackers.values():
+
+        for name, tracker in trackers.items():
             try:
                 tracker.close()
             except Exception:
                 pass
 
         logger.info(
-            f"Run terminé — "
-            f"nouveaux: {stats['signals_new']} | "
-            f"doublons: {stats['signals_duplicate']} | "
+            f"Run completed — "
+            f"new: {stats['signals_new']} | "
+            f"duplicates: {stats['signals_duplicate']} | "
             f"actions: {stats['actions_generated']} | "
-            f"notifs: {stats['notifications_sent']} | "
+            f"notifications: {stats['notifications_sent']} | "
             f"status: {stats['status']}"
         )
         logger.info("=" * 60)

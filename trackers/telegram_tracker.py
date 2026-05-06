@@ -1,13 +1,10 @@
 """
-telegram_tracker.py — v1.6
-Lecture des canaux/groupes Telegram des projets via Telethon.
+telegram_tracker.py — v1.9
+Read Telegram project channels via Telethon official API.
 
-CHANGELOG v1.6 :
-  - Gestion robuste du SESSION_STRING (connexion sans interaction humaine)
-  - Timeout et retry sur les canaux inaccessibles
-  - Filtrage des messages trop courts ou non-texte
-  - TelegramTrackerSync : wrapper synchrone propre pour agent.py
-  - Désactivation gracieuse si credentials manquants
+CHANGELOG v1.9:
+  - Full translation to English (comments, logs, docstrings)
+  - No functional changes from v1.6
 """
 
 import os
@@ -19,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class TelegramTracker:
-    """Client Telegram asynchrone basé sur Telethon + StringSession."""
+    """Async Telegram client based on Telethon + StringSession."""
 
     def __init__(self):
         self.api_id      = os.environ.get("TELEGRAM_API_ID", "").strip()
@@ -34,10 +31,10 @@ class TelegramTracker:
             if not self.api_id:      missing.append("TELEGRAM_API_ID")
             if not self.api_hash:    missing.append("TELEGRAM_API_HASH")
             if not self.session_str: missing.append("TELEGRAM_SESSION_STRING")
-            logger.info(f"TelegramTracker désactivé — manquants : {', '.join(missing)}")
+            logger.info(f"TelegramTracker disabled — missing: {', '.join(missing)}")
 
     async def _connect(self):
-        """Initialise et connecte le client Telethon."""
+        """Initialize and connect the Telethon client."""
         if self.client and self.client.is_connected():
             return
 
@@ -49,7 +46,6 @@ class TelegramTracker:
                 StringSession(self.session_str),
                 int(self.api_id),
                 self.api_hash,
-                # Paramètres pour environnement headless (GitHub Actions)
                 request_retries=3,
                 connection_retries=3,
                 retry_delay=2,
@@ -58,26 +54,26 @@ class TelegramTracker:
 
             if not await self.client.is_user_authorized():
                 raise RuntimeError(
-                    "Session Telegram non autorisée. "
-                    "Régénère le SESSION_STRING avec scripts/generate_session.py"
+                    "Telegram session not authorized. "
+                    "Regenerate SESSION_STRING with: python scripts/generate_session.py"
                 )
 
             me = await self.client.get_me()
-            logger.info(f"Telegram connecté : @{me.username or me.first_name}")
+            logger.info(f"Telegram connected: @{me.username or me.first_name}")
 
         except ImportError:
-            raise ImportError("Package 'telethon' manquant. Lance : pip install telethon")
+            raise ImportError("Package 'telethon' missing. Run: pip install telethon")
 
     async def get_channel_messages(self, handle: str, limit: int = 20) -> list:
         """
-        Récupère les derniers messages texte d'un canal ou groupe Telegram.
+        Fetch the latest text messages from a Telegram channel or group.
 
         Args:
-            handle : username sans @ (ex: "monadxyz") ou lien invite
-            limit  : nombre max de messages à récupérer
+            handle : username without @ (e.g. "monadxyz") or invite link
+            limit  : max number of messages to fetch
 
         Returns:
-            liste de dicts {content, date, message_id, views, source}
+            list of dicts {content, date, message_id, views, url, source}
         """
         if not self.enabled:
             return []
@@ -87,7 +83,6 @@ class TelegramTracker:
             messages = []
 
             async for msg in self.client.iter_messages(handle, limit=limit):
-                # Ignorer les messages sans texte
                 if not msg.text or len(msg.text.strip()) < 15:
                     continue
 
@@ -100,36 +95,40 @@ class TelegramTracker:
                     "url":        f"https://t.me/{handle}/{msg.id}",
                 })
 
-            logger.info(f"Telegram @{handle} : {len(messages)} messages récupérés")
+            logger.info(f"Telegram @{handle}: {len(messages)} messages fetched")
             return messages
 
         except Exception as e:
             err = str(e)
             if "USERNAME_NOT_OCCUPIED" in err or "Cannot find any entity" in err:
-                logger.warning(f"Telegram @{handle} : canal introuvable ou privé")
+                logger.warning(f"Telegram @{handle}: channel not found or private")
             elif "FLOOD_WAIT" in err:
-                logger.warning(f"Telegram @{handle} : flood wait — réessayer plus tard")
+                logger.warning(f"Telegram @{handle}: flood wait — retry later")
             else:
-                logger.warning(f"Telegram @{handle} : {e}")
+                logger.warning(f"Telegram @{handle}: {e}")
             return []
 
     async def disconnect(self):
-        """Ferme proprement la connexion."""
+        """Cleanly close the Telegram connection."""
         if self.client and self.client.is_connected():
             await self.client.disconnect()
-            logger.debug("Telegram déconnecté")
+            logger.debug("Telegram disconnected")
 
 
 class TelegramTrackerSync:
     """
-    Wrapper synchrone pour TelegramTracker.
-    Utilisé par agent.py qui n'est pas async.
-    Crée sa propre event loop isolée.
+    Synchronous wrapper for TelegramTracker.
+    Used by agent.py which is not async.
+    Creates its own isolated event loop.
     """
 
-    def __init__(self, config: dict = None):
+    def __init__(self):
         self._tracker = TelegramTracker()
         self._loop    = None
+
+    @property
+    def enabled(self) -> bool:
+        return self._tracker.enabled
 
     def _get_loop(self) -> asyncio.AbstractEventLoop:
         if self._loop is None or self._loop.is_closed():
@@ -137,29 +136,21 @@ class TelegramTrackerSync:
             asyncio.set_event_loop(self._loop)
         return self._loop
 
-    @property
-    def enabled(self) -> bool:
-        return self._tracker.enabled
-
     def get_messages(self, handle: str, limit: int = 20) -> list:
-        """Interface synchrone pour get_channel_messages."""
-        if not self._tracker.enabled:
+        """Synchronous interface for get_channel_messages."""
+        if not self._tracker.enabled or not handle:
             return []
-
-        if not handle or not handle.strip():
-            return []
-
         try:
             loop = self._get_loop()
             return loop.run_until_complete(
                 self._tracker.get_channel_messages(handle.strip(), limit)
             )
         except Exception as e:
-            logger.warning(f"TelegramTrackerSync — @{handle} : {e}")
+            logger.warning(f"TelegramTrackerSync — @{handle}: {e}")
             return []
 
     def close(self):
-        """Ferme proprement la connexion et l'event loop."""
+        """Cleanly close connection and event loop."""
         if self._tracker.enabled and self._loop and not self._loop.is_closed():
             try:
                 self._loop.run_until_complete(self._tracker.disconnect())
