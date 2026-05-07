@@ -1,35 +1,37 @@
 """
-tge_radar.py — v1.8
-Radar de détection des signaux précurseurs TGE/snapshot.
+tge_radar.py — v1.9.1
+TGE/snapshot precursor signal detection radar.
 
-Analyse les signaux récents d'un projet et calcule un score
-de probabilité TGE imminente (0-100) basé sur des patterns
-observés historiquement sur des centaines d'airdrops.
+Analyzes recent signals from a project and computes a TGE probability
+score (0-100) based on patterns historically observed across hundreds
+of airdrops (Arbitrum, Optimism, zkSync, Starknet, MONAD, etc.).
 
-Patterns détectés :
-  - Tokenomics publiés
-  - Audit smart contract annoncé/complété
-  - Date de lancement mentionnée
-  - "Last chance" / "Final" / urgence dans les communications
-  - Activité inhabituelle (volume de tweets, fréquence annonces)
-  - Mentions de CEX/listings
-  - Fermeture de testnet annoncée
+Detected pattern categories:
+  - Tokenomics published
+  - Smart contract audit announced/completed
+  - Launch date mentioned
+  - "Last chance" / "Final" / urgency in communications
+  - CEX listing announced
+  - Testnet closure announced
+  - Snapshot directly mentioned
+
+CHANGELOG v1.9.1:
+  - Full translation to English (comments, docstrings, strings)
+  - No functional changes from v1.8
 """
 
-import re
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
-# ── Patterns pondérés par catégorie ─────────────────────────
-# Score = somme des poids des patterns détectés, plafonné à 100
+# ── Weighted patterns by category ────────────────────────────
+# Score = sum of matched pattern weights, capped at 100
 
 TGE_PATTERNS = {
 
-    # Signaux forts (poids élevé)
     "tokenomics": {
         "weight": 25,
         "keywords": [
@@ -64,8 +66,6 @@ TGE_PATTERNS = {
             "coming soon", "very soon", "launching", "go live",
         ],
     },
-
-    # Signaux d'urgence
     "urgency": {
         "weight": 20,
         "keywords": [
@@ -82,8 +82,6 @@ TGE_PATTERNS = {
             "claimable", "distribution date", "airdrop date",
         ],
     },
-
-    # Signaux de fin de testnet
     "testnet_end": {
         "weight": 20,
         "keywords": [
@@ -92,8 +90,6 @@ TGE_PATTERNS = {
             "moving to mainnet", "testnet rewards",
         ],
     },
-
-    # Signaux d'activité communautaire intense
     "community_surge": {
         "weight": 10,
         "keywords": [
@@ -133,92 +129,73 @@ SNAPSHOT_PATTERNS = {
 
 class TGERadar:
     """
-    Analyse les signaux d'un projet et calcule un score TGE.
-    Score 0-100 : probabilité d'un TGE/snapshot imminent.
+    Analyzes project signals and computes a TGE probability score.
+    Score 0-100: probability of an imminent TGE or snapshot.
     """
 
     def __init__(self, config: dict = None):
         self.config = config or {}
 
     def _scan_text(self, text: str, patterns: dict) -> dict:
-        """
-        Scanne un texte et retourne les patterns trouvés avec leurs poids.
-        """
+        """Scan text and return matched patterns with their weights."""
         text_lower = text.lower()
         found = {}
 
         for category, data in patterns.items():
-            matched_keywords = [
-                kw for kw in data["keywords"]
-                if kw in text_lower
-            ]
-            if matched_keywords:
+            matched = [kw for kw in data["keywords"] if kw in text_lower]
+            if matched:
                 found[category] = {
                     "weight":   data["weight"],
-                    "keywords": matched_keywords,
+                    "keywords": matched,
                 }
 
         return found
 
     def _calculate_score(self, found_patterns: dict) -> int:
-        """Calcule le score en sommant les poids, plafonné à 100."""
+        """Sum matched pattern weights, capped at 100."""
         total = sum(p["weight"] for p in found_patterns.values())
         return min(total, 100)
 
     def analyze_signals(self, signals: list, project_name: str) -> dict:
         """
-        Analyse une liste de signaux et retourne le rapport TGE.
+        Analyze a list of signals and return a TGE report.
 
         Args:
-            signals      : liste de signaux de la DB (24-48h)
-            project_name : nom du projet
+            signals      : list of DB signals (24-48h window)
+            project_name : project name for logging
 
         Returns:
             {
-                tge_score       : int 0-100,
-                snapshot_score  : int 0-100,
-                risk_level      : "critical"|"high"|"medium"|"low",
+                tge_score         : int 0-100,
+                snapshot_score    : int 0-100,
+                global_score      : int 0-100,
+                risk_level        : "critical"|"high"|"medium"|"low",
                 detected_patterns : dict,
-                top_signals     : list,
-                recommendation  : str,
+                top_signals       : list,
+                recommendation    : str,
+                analyzed_at       : str (ISO datetime),
             }
         """
         if not signals:
             return self._empty_report(project_name)
 
-        # Combiner tous les contenus pour une analyse globale
-        combined_text = " ".join(
-            s.get("content", "") for s in signals
-        )
-
-        # Scanner TGE et snapshot séparément
+        combined_text  = " ".join(s.get("content", "") for s in signals)
         tge_found      = self._scan_text(combined_text, TGE_PATTERNS)
         snapshot_found = self._scan_text(combined_text, SNAPSHOT_PATTERNS)
 
         tge_score      = self._calculate_score(tge_found)
         snapshot_score = self._calculate_score(snapshot_found)
+        global_score   = max(tge_score, snapshot_score)
 
-        # Score global = max des deux (on prend le pire cas)
-        global_score = max(tge_score, snapshot_score)
-
-        # Identifier les signaux les plus pertinents
         top_signals = sorted(
-            signals,
-            key=lambda s: s.get("urgency_score", 0),
-            reverse=True
+            signals, key=lambda s: s.get("urgency_score", 0), reverse=True
         )[:3]
 
-        # Niveau de risque
-        if global_score >= 70:
-            risk_level = "critical"
-        elif global_score >= 50:
-            risk_level = "high"
-        elif global_score >= 30:
-            risk_level = "medium"
-        else:
-            risk_level = "low"
+        if global_score >= 70:   risk_level = "critical"
+        elif global_score >= 50: risk_level = "high"
+        elif global_score >= 30: risk_level = "medium"
+        else:                    risk_level = "low"
 
-        # Recommandation contextuelle
         recommendation = self._build_recommendation(
             tge_score, snapshot_score, tge_found, snapshot_found, project_name
         )
@@ -229,19 +206,17 @@ class TGERadar:
             "snapshot_score":    snapshot_score,
             "global_score":      global_score,
             "risk_level":        risk_level,
-            "detected_patterns": {
-                "tge":      tge_found,
-                "snapshot": snapshot_found,
-            },
-            "top_signals":    [s.get("content", "") for s in top_signals],
-            "recommendation": recommendation,
-            "analyzed_at":    datetime.utcnow().isoformat(),
+            "detected_patterns": {"tge": tge_found, "snapshot": snapshot_found},
+            "top_signals":       [s.get("content", "") for s in top_signals],
+            "recommendation":    recommendation,
+            "analyzed_at":       datetime.utcnow().isoformat(),
         }
 
         if global_score >= 30:
             logger.info(
-                f"TGE Radar — {project_name} : score {global_score}/100 "
-                f"[{risk_level.upper()}] — patterns: {list(tge_found.keys()) + list(snapshot_found.keys())}"
+                f"TGE Radar — {project_name}: score {global_score}/100 "
+                f"[{risk_level.upper()}] — patterns: "
+                f"{list(tge_found.keys()) + list(snapshot_found.keys())}"
             )
 
         return report
@@ -254,45 +229,39 @@ class TGERadar:
         snapshot_found: dict,
         project_name: str,
     ) -> str:
-        """Génère une recommandation actionnable selon les patterns détectés."""
+        """Generate an actionable recommendation based on detected patterns."""
 
         if snapshot_score >= 60 or "snapshot" in snapshot_found or "direct" in snapshot_found:
             return (
-                f"⚠️ SNAPSHOT PROBABLE IMMINENT sur {project_name}. "
-                f"Vérifie ton éligibilité MAINTENANT et complète toutes les actions requises."
+                f"⚠️ PROBABLE IMMINENT SNAPSHOT on {project_name}. "
+                f"Verify your eligibility NOW and complete all required actions."
             )
-
         if "listing" in tge_found:
             return (
-                f"🚨 Listing CEX détecté pour {project_name}. "
-                f"TGE très proche — maximise ton engagement et vérifie les critères d'airdrop."
+                f"🚨 CEX listing detected for {project_name}. "
+                f"TGE very close — maximize engagement and check airdrop criteria."
             )
-
         if "launch_date" in tge_found:
             return (
-                f"📅 Date de lancement mentionnée pour {project_name}. "
-                f"Intensifie ton engagement sur Twitter et Discord dès maintenant."
+                f"📅 Launch date mentioned for {project_name}. "
+                f"Intensify Twitter and Discord engagement immediately."
             )
-
         if "tokenomics" in tge_found or "audit" in tge_found:
             return (
-                f"📊 Tokenomics/Audit détectés sur {project_name}. "
-                f"TGE en préparation — reste actif et surveille les annonces de snapshot."
+                f"📊 Tokenomics/Audit detected on {project_name}. "
+                f"TGE in preparation — stay active and watch for snapshot announcements."
             )
-
         if "urgency" in tge_found or "deadline" in snapshot_found:
             return (
-                f"⏰ Urgence détectée sur {project_name}. "
-                f"Vérifie les deadlines et complète toutes les tâches en attente."
+                f"⏰ Urgency signals detected on {project_name}. "
+                f"Check deadlines and complete all pending tasks."
             )
-
         if tge_score >= 20:
             return (
-                f"👀 Signaux TGE détectés sur {project_name}. "
-                f"Reste attentif aux prochaines annonces."
+                f"👀 TGE signals detected on {project_name}. "
+                f"Stay alert for upcoming announcements."
             )
-
-        return f"✅ Pas de signal TGE imminent sur {project_name}."
+        return f"✅ No imminent TGE signal on {project_name}."
 
     def _empty_report(self, project_name: str) -> dict:
         return {
@@ -303,10 +272,10 @@ class TGERadar:
             "risk_level":        "low",
             "detected_patterns": {"tge": {}, "snapshot": {}},
             "top_signals":       [],
-            "recommendation":    f"✅ Pas de signal TGE imminent sur {project_name}.",
+            "recommendation":    f"✅ No imminent TGE signal on {project_name}.",
             "analyzed_at":       datetime.utcnow().isoformat(),
         }
 
     def should_alert(self, report: dict, threshold: int = 40) -> bool:
-        """Retourne True si le score dépasse le seuil d'alerte."""
+        """Return True if the global score exceeds the alert threshold."""
         return report.get("global_score", 0) >= threshold

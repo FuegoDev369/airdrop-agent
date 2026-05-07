@@ -1,12 +1,28 @@
 """
-wallet_scorer.py — v1.8.1
-Estimateur de score wallet et position dans la distribution d'airdrop.
+wallet_scorer.py — v1.9.1
+Wallet score estimator and airdrop distribution position analyzer.
 
-CHANGELOG v1.8.1 :
-  - SÉCURITÉ : wallets lus UNIQUEMENT depuis variables d'environnement
-    (GitHub Secrets ou fichier .env local)
-  - Suppression du champ "wallets" dans settings.yaml
-  - Jamais d'adresse wallet dans le code source ou la config
+Queries public RPCs to analyze on-chain wallet activity on tracked
+project chains, then uses the LLM to estimate probable position
+in the airdrop distribution.
+
+Supported chains (free public RPCs):
+  - Ethereum mainnet
+  - Arbitrum One
+  - Optimism
+  - Base
+  - Polygon
+  - BNB Chain
+  - Avalanche C-Chain
+
+Security:
+  - Wallet addresses are NEVER stored in settings.yaml (public file)
+  - Read exclusively from WALLET_ADDRESSES environment variable
+  - Always masked in logs: 0x1234...5678
+
+CHANGELOG v1.9.1:
+  - Full translation to English (comments, docstrings, strings)
+  - No functional changes from v1.8.1
 """
 
 import os
@@ -16,6 +32,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# ── Free public RPCs ─────────────────────────────────────────
 PUBLIC_RPCS = {
     "ethereum":  "https://eth.llamarpc.com",
     "arbitrum":  "https://arb1.arbitrum.io/rpc",
@@ -36,24 +53,23 @@ class WalletScorer:
 
     def _load_wallets_from_env(self) -> list:
         """
-        Charge les adresses wallet UNIQUEMENT depuis les variables d'environnement.
+        Load wallet addresses ONLY from environment variables.
 
-        Sources (par ordre de priorité) :
-          1. WALLET_ADDRESSES dans GitHub Secrets (production)
-          2. WALLET_ADDRESSES dans fichier .env local (développement Termux)
+        Sources (in priority order):
+          1. WALLET_ADDRESSES in GitHub Secrets (production)
+          2. WALLET_ADDRESSES in local .env file (Termux development)
 
-        Format : adresses séparées par des virgules
-          WALLET_ADDRESSES=0xAdresse1,0xAdresse2,0xAdresse3
+        Format: comma-separated addresses
+          WALLET_ADDRESSES=0xAddress1,0xAddress2,0xAddress3
 
-        NE PAS mettre les adresses dans settings.yaml — ce fichier
-        est public sur GitHub.
+        DO NOT put addresses in settings.yaml — that file is public on GitHub.
         """
         raw = os.environ.get("WALLET_ADDRESSES", "").strip()
 
         if not raw:
             logger.info(
-                "WalletScorer : aucun wallet configuré. "
-                "Ajoute WALLET_ADDRESSES dans GitHub Secrets ou dans .env"
+                "WalletScorer: no wallets configured. "
+                "Add WALLET_ADDRESSES to GitHub Secrets or .env file."
             )
             return []
 
@@ -70,18 +86,19 @@ class WalletScorer:
         ]
         if invalid:
             logger.warning(
-                f"WalletScorer : {len(invalid)} adresse(s) ignorée(s) "
-                f"(format invalide — doit commencer par 0x et faire 42 caractères)"
+                f"WalletScorer: {len(invalid)} address(es) skipped "
+                f"(invalid format — must start with 0x and be 42 characters)"
             )
 
         if wallets:
-            # Log uniquement les 6 premiers + 4 derniers chars — jamais l'adresse complète
+            # Log only masked addresses — never the full address
             masked = [f"{w[:6]}...{w[-4:]}" for w in wallets]
-            logger.info(f"WalletScorer : {len(wallets)} wallet(s) chargé(s) : {masked}")
+            logger.info(f"WalletScorer: {len(wallets)} wallet(s) loaded: {masked}")
 
         return wallets
 
     def _rpc_call(self, rpc_url: str, method: str, params: list) -> Optional[str]:
+        """Execute a JSON-RPC call on a public endpoint."""
         payload = {
             "jsonrpc": "2.0",
             "method":  method,
@@ -93,11 +110,12 @@ class WalletScorer:
             resp.raise_for_status()
             return resp.json().get("result")
         except Exception as e:
-            logger.debug(f"RPC {rpc_url} — {method} : {e}")
+            logger.debug(f"RPC {rpc_url} — {method}: {e}")
             return None
 
     def get_tx_count(self, wallet: str, chain: str) -> Optional[int]:
-        rpc = PUBLIC_RPCS.get(chain.lower())
+        """Get total transaction count for a wallet on a given chain."""
+        rpc    = PUBLIC_RPCS.get(chain.lower())
         if not rpc:
             return None
         result = self._rpc_call(rpc, "eth_getTransactionCount", [wallet, "latest"])
@@ -107,7 +125,8 @@ class WalletScorer:
             return None
 
     def get_balance(self, wallet: str, chain: str) -> Optional[float]:
-        rpc = PUBLIC_RPCS.get(chain.lower())
+        """Get native token balance (ETH/BNB/MATIC...) for a wallet."""
+        rpc    = PUBLIC_RPCS.get(chain.lower())
         if not rpc:
             return None
         result = self._rpc_call(rpc, "eth_getBalance", [wallet, "latest"])
@@ -117,24 +136,29 @@ class WalletScorer:
             return None
 
     def _normalize_chain(self, chain: str) -> Optional[str]:
+        """Normalize a chain name to PUBLIC_RPCS keys."""
         mapping = {
             "eth": "ethereum", "ethereum": "ethereum", "mainnet": "ethereum",
             "arb": "arbitrum", "arbitrum": "arbitrum", "arbitrum one": "arbitrum",
-            "op": "optimism", "optimism": "optimism",
+            "op": "optimism",  "optimism": "optimism",
             "base": "base",
             "matic": "polygon", "polygon": "polygon",
-            "bnb": "bsc", "bsc": "bsc",
+            "bnb": "bsc",      "bsc": "bsc",
             "avax": "avalanche", "avalanche": "avalanche",
         }
         return mapping.get(chain.lower())
 
     def analyze_wallet_for_project(self, wallet: str, project: dict) -> dict:
+        """
+        Analyze a wallet in the context of a specific project.
+        Returns an activity profile usable by the LLM for scoring.
+        """
         chain            = project.get("chain", "ethereum").lower()
         chain_normalized = self._normalize_chain(chain)
         masked_wallet    = f"{wallet[:6]}...{wallet[-4:]}"
 
         activity = {
-            "wallet":       masked_wallet,  # Jamais l'adresse complète dans les logs
+            "wallet":       masked_wallet,  # Never the full address in logs
             "project":      project.get("name", ""),
             "chain":        chain,
             "tags":         project.get("tags", []),
@@ -146,6 +170,7 @@ class WalletScorer:
         if chain_normalized and chain_normalized in PUBLIC_RPCS:
             tx_count = self.get_tx_count(wallet, chain_normalized)
             balance  = self.get_balance(wallet, chain_normalized)
+
             if tx_count is not None:
                 activity["tx_count"]     = tx_count
                 activity["data_sources"].append(f"tx_count via {chain_normalized} RPC")
@@ -153,11 +178,15 @@ class WalletScorer:
                 activity["balance"]      = round(balance, 6)
                 activity["data_sources"].append(f"balance via {chain_normalized} RPC")
         else:
-            logger.info(f"WalletScorer : chain '{chain}' non supportée — analyse LLM uniquement")
+            logger.info(
+                f"WalletScorer: chain '{chain}' not supported by public RPCs — "
+                f"LLM-only analysis based on context"
+            )
 
         return activity
 
     def _basic_score(self, activity: dict) -> dict:
+        """Basic scoring without LLM — based purely on on-chain data."""
         tx_count = activity.get("tx_count") or 0
         balance  = activity.get("balance")  or 0.0
         score    = 0
@@ -177,15 +206,26 @@ class WalletScorer:
             "low"       if score >= 20 else
             "unknown"
         )
+
         return {
             "score_estimate":      min(score, 100),
             "tier":                tier,
-            "strengths":           [f"{tx_count} transactions on-chain"] if tx_count else [],
-            "weaknesses":          ["Données limitées sans LLM"],
-            "recommended_actions": ["Augmenter l'activité on-chain"],
+            "strengths":           [f"{tx_count} on-chain transactions"] if tx_count else [],
+            "weaknesses":          ["Limited data without LLM analysis"],
+            "recommended_actions": ["Increase on-chain activity"],
         }
 
     def score_all_wallets(self, project: dict, llm=None) -> list:
+        """
+        Score all configured wallets for a specific project.
+
+        Args:
+            project : project dict from DB
+            llm     : LLMEngine instance for AI-powered scoring
+
+        Returns:
+            list of scoring reports per wallet
+        """
         if not self.wallets:
             return []
 
@@ -193,38 +233,50 @@ class WalletScorer:
         for wallet in self.wallets:
             try:
                 activity     = self.analyze_wallet_for_project(wallet, project)
-                score_report = llm.score_wallet_eligibility(project["name"], activity) if llm else self._basic_score(activity)
-                score_report["wallet"]   = f"{wallet[:6]}...{wallet[-4:]}"  # Masqué
+                score_report = (
+                    llm.score_wallet_eligibility(project["name"], activity)
+                    if llm else
+                    self._basic_score(activity)
+                )
+                score_report["wallet"]   = f"{wallet[:6]}...{wallet[-4:]}"  # Masked
                 score_report["activity"] = activity
                 reports.append(score_report)
+
                 logger.info(
-                    f"Wallet {wallet[:6]}...{wallet[-4:]} — {project['name']} : "
-                    f"score {score_report.get('score_estimate', '?')}/100 [{score_report.get('tier', '?')}]"
+                    f"Wallet {wallet[:6]}...{wallet[-4:]} — {project['name']}: "
+                    f"score {score_report.get('score_estimate', '?')}/100 "
+                    f"[{score_report.get('tier', '?')}]"
                 )
             except Exception as e:
-                logger.warning(f"Erreur scoring wallet {wallet[:6]}... : {e}")
+                logger.warning(f"Wallet scoring error {wallet[:6]}...: {e}")
 
         return reports
 
     def format_notification(self, reports: list, project_name: str) -> str:
+        """Format wallet scores as a readable Telegram/Discord message."""
         if not reports:
             return (
                 f"💼 Wallet Scoring — {project_name}\n\n"
-                f"Aucun wallet configuré.\n"
-                f"Ajoute <code>WALLET_ADDRESSES</code> dans GitHub Secrets."
+                f"No wallets configured.\n"
+                f"Add <code>WALLET_ADDRESSES</code> to GitHub Secrets or .env file."
             )
 
         tier_emoji = {
-            "top_1pct": "🏆", "top_5pct": "🥇", "top_20pct": "🥈",
-            "eligible": "✅", "low": "⚠️", "unknown": "❓",
+            "top_1pct":  "🏆",
+            "top_5pct":  "🥇",
+            "top_20pct": "🥈",
+            "eligible":  "✅",
+            "low":       "⚠️",
+            "unknown":   "❓",
         }
+
         lines = [f"💼 <b>Wallet Scoring — {project_name}</b>\n"]
 
         for r in reports:
             emoji   = tier_emoji.get(r.get("tier", "unknown"), "❓")
             actions = r.get("recommended_actions", [])
             lines.append(f"{emoji} <code>{r.get('wallet', '???')}</code>")
-            lines.append(f"   Score : <b>{r.get('score_estimate', 0)}/100</b> | {r.get('tier', '?')}")
+            lines.append(f"   Score: <b>{r.get('score_estimate', 0)}/100</b> | {r.get('tier', '?')}")
             if actions:
                 lines.append(f"   → {actions[0]}")
             lines.append("")

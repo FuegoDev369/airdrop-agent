@@ -1,104 +1,132 @@
-name: AirdropAgent — Run Autonome
+name: AirdropAgent — Autonomous Run
 
 on:
   schedule:
+    # Every 2 hours — must match run_interval_hours in settings.yaml
     - cron: '0 */2 * * *'
 
+  # Manual trigger from GitHub UI (Actions tab → Run workflow)
   workflow_dispatch:
     inputs:
       debug_mode:
-        description: 'Activer les logs DEBUG ?'
+        description: 'Enable DEBUG logs?'
         required: false
         default: 'false'
         type: choice
         options:
-          - 'true'
           - 'false'
+          - 'true'
 
 jobs:
   run-agent:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 30      # Kill job if it exceeds 30 minutes
 
     permissions:
-      contents: write
-      actions: read
+      contents: write         # Required for potential repo writes
+      actions: read           # Required to read artifacts from previous runs
 
     steps:
+      # ── 1. Checkout repository ─────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ── 2. Setup Python ────────────────────────────────────
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
+      # ── 3. Install dependencies ────────────────────────────
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # ── 4. Prepare data directory ──────────────────────────
+      # Create data/ before download — prevents path errors
       - name: Prepare data directory
         run: mkdir -p data/
 
-      # ── RESTORE : cherche le dernier artifact via API GitHub ──
-      # download-artifact@v4 ne peut pas chercher cross-run sans run-id explicite.
-      # On utilise l'API REST GitHub pour trouver le run-id du dernier artifact
-      # agent-db disponible, puis on le télécharge manuellement.
+      # ── 5. Restore DB from latest artifact ─────────────────
+      # Uses GitHub API to find the latest agent-db artifact
+      # across all previous runs (not just the current run).
+      # On first run ever: artifact not found → DB created fresh → normal behavior
       - name: Restore agent database
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Recherche du dernier artifact agent-db..."
+          echo "Searching for latest agent-db artifact..."
 
-          # Récupère la liste des artifacts du repo via API GitHub
-          ARTIFACTS=$(gh api \
+          ARTIFACT=$(gh api \
             "repos/${{ github.repository }}/actions/artifacts?name=agent-db&per_page=5" \
             --jq '.artifacts | map(select(.expired == false)) | sort_by(.created_at) | reverse | .[0]')
 
-          if [ -z "$ARTIFACTS" ] || [ "$ARTIFACTS" = "null" ]; then
-            echo "Aucun artifact trouvé — premier run ou artifacts expirés. DB sera créée."
+          if [ -z "$ARTIFACT" ] || [ "$ARTIFACT" = "null" ]; then
+            echo "No artifact found — first run or all artifacts expired. Fresh DB will be created."
             exit 0
           fi
 
-          ARTIFACT_ID=$(echo "$ARTIFACTS" | jq -r '.id')
-          ARTIFACT_DATE=$(echo "$ARTIFACTS" | jq -r '.created_at')
+          ARTIFACT_ID=$(echo "$ARTIFACT" | jq -r '.id')
+          ARTIFACT_DATE=$(echo "$ARTIFACT" | jq -r '.created_at')
 
-          echo "Artifact trouvé : ID=$ARTIFACT_ID (créé le $ARTIFACT_DATE)"
+          echo "Artifact found: ID=$ARTIFACT_ID (created $ARTIFACT_DATE)"
 
-          # Télécharge l'artifact dans data/
           gh api "repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip" \
             > /tmp/agent-db.zip
 
           unzip -o /tmp/agent-db.zip -d data/
-          echo "DB restaurée avec succès ✅ ($(du -sh data/agent.db | cut -f1))"
+          echo "Database restored successfully ✅ ($(du -sh data/agent.db | cut -f1))"
 
+      # ── 6. Run AirdropAgent ────────────────────────────────
       - name: Run AirdropAgent
         env:
+          # PYTHONPATH = repo root — resolves all inter-module imports
           PYTHONPATH: ${{ github.workspace }}
+
+          # LLM
           GROQ_API_KEY:             ${{ secrets.GROQ_API_KEY }}
+
+          # Discord notifications (webhook — different from Discord tracker token)
           DISCORD_WEBHOOK:          ${{ secrets.DISCORD_WEBHOOK }}
+
+          # Telegram notifications
           TELEGRAM_BOT_TOKEN:       ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:         ${{ secrets.TELEGRAM_CHAT_ID }}
+
+          # Telegram tracker (read project channels)
           TELEGRAM_API_ID:          ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH:        ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_SESSION_STRING:  ${{ secrets.TELEGRAM_SESSION_STRING }}
+
+          # Wallet scorer — NEVER put wallet addresses in settings.yaml
+          WALLET_ADDRESSES:         ${{ secrets.WALLET_ADDRESSES }}
+
+          # Discord tracker (optional)
+          DISCORD_USER_TOKEN:       ${{ secrets.DISCORD_USER_TOKEN }}
+
+          # Log level — set to DEBUG via workflow_dispatch input for troubleshooting
           LOG_LEVEL: ${{ github.event.inputs.debug_mode == 'true' && 'DEBUG' || 'INFO' }}
 
         run: python -m core.agent
 
+      # ── 7. Save updated DB as artifact ────────────────────
+      # Runs even if the agent step failed (if: always())
+      # Overwrites the previous artifact to keep only the latest state
       - name: Save agent database
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: agent-db
           path: data/agent.db
-          retention-days: 90
-          overwrite: true
+          retention-days: 90    # Keep 90 days of history
+          overwrite: true       # Replace previous artifact
 
+      # ── 8. Run summary ─────────────────────────────────────
       - name: Run summary
         if: always()
         run: |
           echo "## AirdropAgent Run Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Date** : $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
           echo "- **Trigger** : ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Status** : ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
