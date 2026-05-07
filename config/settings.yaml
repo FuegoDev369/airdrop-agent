@@ -123,12 +123,12 @@ projects:
       - "announcements"
       - "general"
     telegram_handle: ""
-    website_url: ""
+    website_url: "https://www.minetenaz.com/"
     chain: ""
     contract_address: null
     tge_date: null
     priority: 8
-    tags: []
+    tags: ["mining","mobile"]
 
 # ------------------------------------------------------------
 #  Twitter Scraping (via public Nitter instances)
