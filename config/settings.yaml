@@ -16,7 +16,7 @@
 agent:
   name: "AirdropAgent"
   version: "1.9.0"
-  run_interval_hours: 2         # Must match cron in agent.yml
+  run_interval_hours: 6         # Must match cron in agent.yml
   log_level: "INFO"             # DEBUG | INFO | WARNING | ERROR
   timezone: "Africa/Porto-Novo"
 
